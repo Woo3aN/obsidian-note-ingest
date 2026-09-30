@@ -67,6 +67,31 @@ jobs:
           gh release upload "${{ steps.v.outputs.tag }}" \
             "obsidian-note-ingest-${{ steps.v.outputs.ver }}.zip" --clobber
 
+      # CHANGELOG 里每个版本都有成稿的中文说明，直接取对应小节当 Release 描述，
+      # 不用 GitHub 自动生成的英文提交列表
+      - name: 用 CHANGELOG 对应小节写 Release 说明
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VER="${{ steps.v.outputs.ver }}"
+          awk -v VER="$VER" '
+            index($0, "## [" VER "]") == 1 { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > body.md
+          if [ -s body.md ]; then
+            {
+              echo '> ⚠️ **pre-release** —— 0.x 表示尚未稳定，接口与文件结构可能变动。'
+              echo ''
+              echo '安装：`npx skills add Woo3aN/obsidian-note-ingest`（或见 README 的三种方式）'
+              echo ''
+              cat body.md
+            } > release-notes.md
+            gh release edit "${{ steps.v.outputs.tag }}" --notes-file release-notes.md
+          else
+            echo "CHANGELOG 里没有 [${VER}] 小节，保留自动生成的说明"
+          fi
+
       - name: 结果
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
