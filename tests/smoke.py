@@ -25,6 +25,14 @@ import sys
 import tempfile
 from pathlib import Path
 
+# Windows 上 stdout 默认编码可能是 cp1252 / cp936，打印中文会直接 UnicodeEncodeError
+# （GitHub 的 windows runner 就是 cp1252）。必须在任何输出之前设置。
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parent / "scripts"
 PY = sys.executable
