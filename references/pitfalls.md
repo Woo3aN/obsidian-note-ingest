@@ -82,12 +82,31 @@
   做法：把第一章的改成 `## 第一章小结`，第二章用 `## 第二章小结`。改标题属「修改已有文字」，先跟用户说一声。
 - **新增一章时用新的 `#` 一级标题**与前一章平级（H1 = 章），比把整篇降级
   （`#`→`##` 全线位移）改动小得多。
-- **多章写入一次做完，别分几次**：新增几处 + 若干处已有文字更新，写成一个脚本一次落盘
-  （每处 `assert s.count(old) == 1`），比来回调用 `insert` / `replace` 稳得多，也只需问用户一遍。
-  这样改动面一目了然：`diff` 里 `<` 行数就等于旧文字被动的行数。
+- **批量改动一次做完：两个字典 + 整行锚点**（`INS` 插入 / `REP` 改写）：
+
+  ```python
+  lines = raw.split('\n')
+  for a in list(INS) + list(REP):
+      assert lines.count(a) == 1, f"锚点非唯一：{a[:60]!r}"   # 整行匹配，防子串误命中
+  out, used = [], set()
+  for ln in lines:
+      if ln in REP:
+          used.add(ln); out.extend(REP[ln].split('\n'))
+      else:
+          out.append(ln)
+          if ln in INS:
+              used.add(ln); out.extend(INS[ln].split('\n'))
+  assert used == set(INS) | set(REP)   # 防锚点写错后被静默跳过
+  ```
+
+  一次落盘 = 一次备份、一次 diff 核对、只问用户一遍。`lines.count()` 是整行匹配，
+  不会像 `s.count(old)` 那样被子串误命中。改完 diff 数 `<` 行：**删除行应只有 `REP` 那几行**。
 
 ## 其他
 
+- **用户说「继续」却没说新材料在哪时，先按修改时间列一遍下载目录**：课件与录音稿往往
+  同一晚一起下载，`find <下载目录> -maxdepth 1 -type f -newermt "-3 days"` 一眼就能捞出来；
+  把候选列给用户确认，比反问「材料在哪」快。
 - **材料只讲到一部分时**（如「就整理到录音截止的地方」）：只写已讲内容，未讲授部分在文末列一个
   `[!todo] 待上课整理` callout（保留课件原小节号和一句内容提要）；范围 callout 里注明「课堂只讲到此」；
   **只讲了前半时未用到的图直接从 `imgs/` 删掉**，不留孤儿图。
