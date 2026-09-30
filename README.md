@@ -16,20 +16,17 @@
 
 ## 它解决什么问题
 
-手动整理课件笔记的痛点，这个 skill 逐条对付：
-
 | 痛点 | 做法 |
 |------|------|
 | PPTX 里的**表格和公式抽不出来** | `pptx_deep.py` 直接解析 `slideN.xml`，绕开 `AlternateContent` 拿到表格，解析 OMML 拿到公式 |
 | 老课件公式是 **OLE 对象**，抽出来一片空白 | 从 PDF 文本层按**坐标几何**重建分式 / 上下标 / 矢量（`pdf_layout.py`） |
 | 公式型 PDF 提取出来**完全散架** | `renderpages.py` 渲染成图让模型看，或以版面几何重建 |
-| 课件插图**裁不干净**（切到文字、留一堆白边） | `pdf_panels.py` 按纯色面板找边界，比按笔画估框准得多 |
+| 课件插图**裁不干净**（切到文字、留一堆白边） | `pdf_panels.py` 按纯色面板找边界 |
 | 整理完发现**内容早就有了** / 灌了一堆重复 | `vaultio.py check` 查重，并附「覆盖率为什么会骗人」的判别法 |
 | 改笔记时**误删、行尾被改、callout 被截断** | 所有写入走 `vaultio.py`（强制 LF、自动备份、`--dry-run` 预览） |
 | 笔记写完**满页彩色块，重点反而没了** | `obsidian_lint.py` 量化色块密度 + `flatten_callouts.py` 一键降级 |
 
-`references/` 里还记着**几十条实战踩坑**（表格丢列、图注配错、`--until` 吃掉一整段、
-OCR 丢括号导致公式歧义……），都是真金白银换来的，不是理论。
+`references/` 里是各环节的细节文档，另附几十条实战踩坑记录。
 
 ---
 
@@ -44,8 +41,7 @@ $PY -m pip install -r requirements.txt
 
 ### 2. 一键安装 skill
 
-**方式 A —— skills CLI（推荐）**，一条命令认领，支持 Claude Code / Codex / Cursor / Copilot /
-Gemini CLI / Windsurf / Cline 等 70+ 环境，会自动装到对应 agent 的目录：
+**方式 A —— skills CLI（推荐）**，支持 Claude Code / Codex / Cursor / Copilot / Gemini CLI 等 70+ 环境：
 
 ```bash
 npx skills add Woo3aN/obsidian-note-ingest          # 装到当前项目
@@ -60,7 +56,7 @@ npx openskills install Woo3aN/obsidian-note-ingest
 npx openskills sync
 ```
 
-**方式 C —— git clone**（最通用，不依赖任何 CLI，任何环境都能用）：
+**方式 C —— git clone**（不依赖任何 CLI）：
 
 ```bash
 # 直接 clone 进 agent 的 skill 目录。目录名与 frontmatter 的 name 一致，别改名
@@ -71,16 +67,13 @@ git clone --depth 1 https://github.com/Woo3aN/obsidian-note-ingest \
 cd ~/.claude/skills/obsidian-note-ingest && git pull
 ```
 
-要同时喂给多个 agent、又不想装好几份？clone 到一处，再软链过去：
+多个 agent 共用一份：clone 到一处，再软链过去。
 
 ```bash
 git clone --depth 1 https://github.com/Woo3aN/obsidian-note-ingest ~/dev/obsidian-note-ingest
 ln -s ~/dev/obsidian-note-ingest ~/.claude/skills/obsidian-note-ingest      # macOS / Linux
 # Windows 需开发者模式或管理员：mklink /D "%USERPROFILE%\.claude\skills\obsidian-note-ingest" "<clone 路径>"
 ```
-
-`git clone` 与两种 CLI 装出来的是**同一份东西**（CLI 默认用软链，`--copy` 则复制）。
-仓库带 `.gitattributes`（`* text=auto eol=lf`），所以 **Windows 上 clone 出来也是 LF**，不会被 Git 的 autocrlf 改成 CRLF。
 
 | 框架 | skill 目录 |
 |------|------------|
@@ -91,14 +84,8 @@ ln -s ~/dev/obsidian-note-ingest ~/.claude/skills/obsidian-note-ingest      # ma
 
 各框架的 skill 目录约定不同，但吃的是同一份 `SKILL.md` + `scripts/`。
 
-> **加载失败怎么办**：若你的 harness 对 frontmatter 做严格校验、报「未知字段」，
-> 删掉 `SKILL.md` 第 4 行的 `description_en`（英文描述只用于展示，删掉不影响功能）即可；
-> 第 5 行 `agent_created` 若同样报错也可删。实测 `npx skills` 与 `openskills` 对这两个键都是容忍的。
-
-> **为什么不做成 pip 包**：能做，但不划算。`scripts/*.py` 之间靠 `sys.path` 互相引用
-> （`flatten_callouts.py` 要用 `vaultio`），打成 wheel 就得改成包内相对导入 ——
-> 那样「把脚本拷走、`python scripts/vaultio.py` 就能跑」这个根基就没了，
-> 而它正是这个 skill 能跨 harness 的原因。Python 依赖照旧走 `pip install -r requirements.txt`。
+> **加载失败怎么办**：harness 严格校验 frontmatter、报「未知字段」时，
+> 删掉 `SKILL.md` 第 4 行 `description_en`（只用于展示，删掉不影响功能）；第 5 行 `agent_created` 同理。
 
 ### 3. 确认你的 vault 能被发现
 
@@ -109,7 +96,7 @@ $PY scripts/vaultio.py vaults
 它读 Obsidian 自己的配置自动发现库，**不需要额外配置**：
 
 | 平台 | 配置位置 |
-|------|------|
+|------|----------|
 | Windows | `%APPDATA%\obsidian\obsidian.json` |
 | macOS | `~/Library/Application Support/obsidian/obsidian.json` |
 | Linux | `~/.config/obsidian/obsidian.json` |
@@ -140,7 +127,7 @@ $PY scripts/obsidian_lint.py "某课程/某课程.md"
 
 ## 目录结构
 
-这个 skill 按**渐进式披露**组织：`SKILL.md` 只放主干（约 400 行），细节按需从 `references/` 读取。
+`SKILL.md` 只放主干（约 400 行），细节按需从 `references/` 读取。
 
 ```
 obsidian-note-ingest/
@@ -149,7 +136,7 @@ obsidian-note-ingest/
 ├── CHANGELOG.md           变更记录
 ├── requirements.txt       依赖清单
 ├── LICENSE                MIT
-├── .gitattributes         强制 LF（Windows 上 clone 不会变 CRLF）
+├── .gitattributes         强制 LF
 ├── .gitignore
 ├── references/            细节文档，按需阅读
 │   ├── extraction.md      提取：两条路线（文本提取 / 从 PDF 重建）
@@ -172,15 +159,13 @@ obsidian-note-ingest/
     └── smoke.py           冒烟测试：临时目录里跑，不碰你的 vault
 ```
 
-`.github/workflows/ci.yml` 会在 Linux + Windows 上自动跑这套冒烟测试。
-
 ## 自检
 
 ```bash
 $PY tests/smoke.py      # 12 项冒烟测试，全部在临时目录里跑，不碰你的 vault
 ```
 
-推送到 GitHub 后，`.github/workflows/ci.yml` 会在 **Linux + Windows** 上自动跑这套测试。
+`.github/workflows/ci.yml` 会在 **Linux + Windows** 上自动跑这套测试。
 
 ## scripts 速查
 
@@ -206,8 +191,7 @@ $PY tests/smoke.py      # 12 项冒烟测试，全部在临时目录里跑，不
    soffice --headless --convert-to pdf  --outdir "<输出目录>" "<材料>.ppt"
    ```
 
-   Windows 上装了 PowerPoint 的话，可以改走 COM 转换，对复杂公式和专用字体的还原通常更准
-   （命令见 `references/extraction.md` 路线 A3）。
+   Windows 装了 PowerPoint 可改走 COM（还原更准，命令见 `references/extraction.md` 路线 A3）。
 
 2. **重画的配图要显式指定中文字体**（在脚本顶部定成一个常量）：
 
@@ -217,8 +201,8 @@ $PY tests/smoke.py      # 12 项冒烟测试，全部在临时目录里跑，不
    | macOS | `PingFang SC` |
    | Linux | `Noto Sans CJK SC` |
 
-   不设或字体缺失时，matplotlib 会**静默画成方框**（只在 stderr 丢一条 glyph 警告，
-   所以规范要求跑完必查警告，见 `references/figures.md`）。
+   不设或字体缺失时 matplotlib 会**静默画成方框**，只丢一条 glyph 警告 —— 所以跑完必查警告
+   （见 `references/figures.md`）。
 
 3. **vault 自动发现三平台都支持。** 若你的 Obsidian 配置文件不在标准位置
    （便携版、自定义安装），用环境变量指路：
@@ -233,8 +217,6 @@ $PY tests/smoke.py      # 12 项冒烟测试，全部在临时目录里跑，不
 
 ## 设计取向
 
-这个 skill 有明确立场，不打算讨好所有人：
-
 - **宁可多问，不擅自改。** 改动已有笔记的正文前一定先给用户看变更预览。
 - **机械的交给脚本，判断的留给人。** 时间戳、断行合并、查重统计归脚本；
   「哪些内容无关、怎么分层」必须真读材料。
@@ -243,8 +225,7 @@ $PY tests/smoke.py      # 12 项冒烟测试，全部在临时目录里跑，不
 
 ## 贡献
 
-欢迎提 Issue / PR。最有价值的贡献是 **`references/` 里的踩坑记录** ——
-如果你用这个 skill 踩到了新的坑、或者发现某条规则过时了，欢迎一并更新。
+欢迎提 Issue / PR，尤其是 `references/` 里的踩坑记录：踩到新坑、或发现某条规则过时了，都欢迎更新。
 
 ## License
 
