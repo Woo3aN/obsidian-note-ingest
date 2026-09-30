@@ -60,11 +60,27 @@ npx openskills install Woo3aN/obsidian-note-ingest
 npx openskills sync
 ```
 
-**方式 C —— 手动**，把整个目录放进你的 skill 目录：
+**方式 C —— git clone**（最通用，不依赖任何 CLI，任何环境都能用）：
 
 ```bash
-git clone https://github.com/Woo3aN/obsidian-note-ingest
+# 直接 clone 进 agent 的 skill 目录。目录名与 frontmatter 的 name 一致，别改名
+git clone --depth 1 https://github.com/Woo3aN/obsidian-note-ingest \
+  ~/.claude/skills/obsidian-note-ingest          # 其余 agent 换成对应目录
+
+# 更新
+cd ~/.claude/skills/obsidian-note-ingest && git pull
 ```
+
+要同时喂给多个 agent、又不想装好几份？clone 到一处，再软链过去：
+
+```bash
+git clone --depth 1 https://github.com/Woo3aN/obsidian-note-ingest ~/dev/obsidian-note-ingest
+ln -s ~/dev/obsidian-note-ingest ~/.claude/skills/obsidian-note-ingest      # macOS / Linux
+# Windows 需开发者模式或管理员：mklink /D "%USERPROFILE%\.claude\skills\obsidian-note-ingest" "<clone 路径>"
+```
+
+`git clone` 与两种 CLI 装出来的是**同一份东西**（CLI 默认用软链，`--copy` 则复制）。
+仓库带 `.gitattributes`（`* text=auto eol=lf`），所以 **Windows 上 clone 出来也是 LF**，不会被 Git 的 autocrlf 改成 CRLF。
 
 | 框架 | skill 目录 |
 |------|------------|
