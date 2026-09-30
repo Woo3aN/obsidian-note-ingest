@@ -1,8 +1,16 @@
 # Changelog
 
 本文件记录 obsidian-note-ingest 的主要变更。
+版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)：**0.x 表示尚未稳定**，
+脚本参数、文件结构与文档都可能继续变动。
 
-## [Unreleased] — 首次开源发布准备
+## [Unreleased]
+
+暂无。
+
+## [0.1.0] - 2026-09-30
+
+**首个公开测试版（pre-release）。**
 
 ### 修复（lint 可信度 / 资源释放 / 死代码）
 
