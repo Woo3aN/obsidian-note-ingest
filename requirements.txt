@@ -1,0 +1,13 @@
+# obsidian-note-ingest 的运行依赖（全部是脚本用到的第三方库）
+# 安装：  $PY -m pip install -r requirements.txt
+# 自检：  $PY -c "import pypdf,pptx,docx,pymupdf,PIL,numpy,yaml,jieba; print('ok')"
+#
+# 版本下限为实测可用版本，不锁死上限：
+pypdf>=6.0            # PDF 文本层提取（extract.py）
+python-pptx>=1.0      # pptx 浅层提取 + pptx_deep.py 深层提取
+python-docx>=1.1      # 录音稿 docx 提取（extract.py）
+pymupdf>=1.24         # PDF 渲染 / 版面重建 / 插图定位；脚本里 import pymupdf
+Pillow>=10.0          # 图片裁切、去白边、拼图（renderpages / pdf_panels / pdf_layout）
+numpy>=1.26           # 像素分析（pdf_panels / 配图验算）
+PyYAML>=6.0           # obsidian_lint 读 frontmatter
+jieba>=0.42           # 查重的中文分词（vaultio.py check）；缺失会退化为 n-gram，关键词质量下降

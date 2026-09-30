@@ -1,0 +1,191 @@
+# 材料提取
+
+> 本文是 `SKILL.md` §3.2 的展开。**何时读**：需要把 PPT / PPTX / PDF / DOCX / 字幕稿里的内容取出来时。
+
+按材料形态选路线：
+
+| 材料形态 | 走哪条 |
+|---|---|
+| `.pptx` / `.docx` / `.srt` / `.vtt` / 文本型 PDF（文本层完整） | 路线 A |
+| 老格式 `.ppt` | 先转格式（A3），再走路线 A |
+| 公式型 PDF（文本层散架）、纯扫描页、图片型材料 | 路线 B |
+
+---
+
+## 路线 A：文本提取
+
+### A1 统一入口 `extract.py`
+
+```bash
+$PY $S/extract.py "<材料路径>" --stats --out "<临时文件>"
+```
+
+- `.pptx` 建议加 `--extract-images <目录>` 导出内嵌图片（公式、示意图是笔记的重要组成）。
+- **图片材料**（.png/.jpg）：脚本只能登记路径，必须真的看图（见 B2）。
+- 提取完**通读全文**再动手。不理解内容就必然删错东西。
+
+### A2 PPTX 课件：必须再跑一遍 `pptx_deep.py`
+
+`extract.py` 走 python-pptx 的 shape 遍历，**课件类 PPTX 会漏掉三类关键内容**（数据表、公式、示意图），
+而它们恰恰是笔记的骨架。**凡课件材料，提取后必须再跑一遍 `pptx_deep.py`，不要跳过。**
+
+| 症状 | 根因 |
+|------|------|
+| 页面只剩标题，正文明明有表格却一个字没有 | 表格包在 `<mc:AlternateContent>` 里，`shape.has_table` 返回 False |
+| 表格抽出来了，但某一列整列是空的 | 那一列写成 OMML（`<m:oMath>`），`<a:t>` 里没有文字 |
+| `--extract-images` 导出的图没有页号 | 文件名只有序号 |
+
+```bash
+$PY $S/pptx_deep.py "<课件.pptx>" "<输出目录>" --tag ch2
+# → ch2_tables.md    所有表格（直接解析 slideN.xml 的 <a:tbl>，绕开 AlternateContent）
+# → ch2_formulas.md  所有 OMML 公式，按页分组
+# → ch2_shapes.md    形状层文本（递归组合形状）
+# → img/ch2_sNN_M.*  按页编号的内嵌图 + _ch2_index.txt
+```
+
+**动线**：`*_tables.md` 与 `*_formulas.md` **按页号对照着读**（表格里空的那一列就在 formulas 里），
+再挑 `img/` 里的结构性示意图逐个看。散落在表格与公式里的完整推导链、多组对照数据表、
+结构图都要靠这一步还原。
+
+**量级对数**：若 `*_tables.md` 或 `*_formulas.md` 明显偏少（尤其为 0），
+说明这页是「只有标题、正文空白」——**不要就此动笔，也不要靠印象补**，
+回查提取报告与 `--tag` 输出目录，确认表格/公式确实被抽出来了。
+漏掉的表格与推导在后面成篇阶段会以「凭印象补」的形式变成错误，这是最容易埋下的隐患。
+
+### A3 老格式 `.ppt`：先转 pptx + pdf
+
+`extract.py` / `pptx_deep.py` 走 python-pptx，**只能吃 `.pptx`**。遇到 `.ppt` 报
+`filetype unrecognized` 或 `PackageNotFoundError` 时，别用 olefile 去解 Powerpoint Document 流，
+先转换格式。**pptx 和 pdf 都转一份**——正文用 pptx，公式和配图走 pdf（交给路线 B）。
+
+**推荐：LibreOffice（跨平台）**
+
+```bash
+soffice --headless --convert-to pptx --outdir "<输出目录>" "<材料>.ppt"
+soffice --headless --convert-to pdf  --outdir "<输出目录>" "<材料>.ppt"
+```
+
+**Windows + 已装 PowerPoint 时**：用 COM 转换，对复杂公式 / 专用字体的还原通常更准：
+
+```powershell
+$ppt = New-Object -ComObject PowerPoint.Application
+$d   = $ppt.Presentations.Open("<绝对路径>.ppt", $true, $false, $false)  # ReadOnly, 不弹窗
+$d.SaveAs("<输出>.pptx", 24)   # 24 = ppSaveAsOpenXMLPresentation
+$d.SaveAs("<输出>.pdf",  32)   # 32 = ppSaveAsPDF
+$d.Close(); $ppt.Quit()
+```
+
+- `SaveAs` 路径**必须绝对路径**，相对路径静默失败。
+- COM 打开时目标文件不能被占用；上一轮遗留的 PowerPoint 进程会让 `Open` 报
+  `PowerPoint could not open the file` —— 先 `$ppt.Quit()` 或杀掉 `POWERPNT.EXE` 再试。
+- 耗时按分钟算，**放后台跑**，别干等。
+
+---
+
+## 路线 B：从 PDF 重建
+
+适用于：公式型 PDF（文本层散架）、纯扫描页、以图为主的材料，以及**老课件里 OLE 公式抽不出来**的情况。
+
+> OLE 公式的识别特征：`pptx_deep.py` 跑出来 `*_formulas.md` **一行都没有**、报告 `formulas 0`。
+> 那些公式是 **OLE 嵌入对象**而非 OMML。**别去挖 `Equation Native` 流**——那是自定义二进制格式，
+> 用 UTF-16 解出来是成片乱码中日韩字符，解不出来。走 B2 或 B3。
+
+### B1 什么时候该重建
+
+**满足任意一条就切过来**：
+
+- `extract.py` 抽出的正文明显散架——分式 / 上下标 / 希腊字母全乱、表格错位（课件、讲义最常见）
+- 报告里出现 `疑似扫描页=[...]`，这些页 pypdf 一个字都抽不出来
+- 材料以图为主：示意图、装置图、坐标图、手写答案页
+
+### B2 有视觉：渲染成图，逐页看
+
+**PDF 不能被「读文本」的方式直接看**——大多数环境的文本读取会把 PDF 当字节流读、不渲染页面。
+做法只有一步：把目标页渲染成 PNG，再逐页看图，**以图为准**，文本层只当检索草稿。
+
+```bash
+$PY $S/renderpages.py "<材料.pdf>" --list                       # 先体检：哪些页没文本层
+$PY $S/renderpages.py "<材料.pdf>" --pages 3-23 --out "<目录>"   # 再渲染目标页（公式密可加 --dpi 140）
+```
+
+**先确认视觉真的可用。** 会话能力可能在半途失去图像支持，此时看图不再报错退出，
+而是返回一条「不支持图像，内容已过滤」之类的提示 —— **看着像成功，一个字都没拿到。**
+
+> **硬规则：每次看图后，先确认返回里真的有图像内容；只看到过滤提示，就等于没看。**
+> 没看到就如实说「这轮读不了图」并转到 B3，
+> 但**绝不能在汇报里把推断说成核对**——基于文本层和常识「描述」出来的图、声称已逐张核对，
+> 是最伤信任的错误。
+
+两个附带现象：
+
+- 有些环境对**同内容图片按哈希去重**：读过的图（哪怕那次被过滤）会返回
+  「与之前加载的图像内容相同」而不给图。绕法：用 PIL 重新编码（存成 JPEG 质量 96）或改尺寸后再读。
+- 恢复视觉能力后，**把之前所有「声称看过」的图重新看一遍**，包括核对图注与图是否相符。
+
+**只走文本层会把推导过程写错**：典型后果是**最终式全对、推导过程全错**（坐标系认反、代换用错、
+定义写反、分量抵消与叠加说反），而**这种错误只看结果自查不出来**。
+**先看图，再动笔**——渲染 + 看图只花几分钟，返工要半小时以上。
+
+### B3 无视觉：版面几何重建
+
+当前会话**没有图像能力**时，看图会直接报错。这时**不要退回去「按物理含义重排」**，
+改用 `pdf_layout.py`：它读**版面几何**，等价于把「看」的活交给坐标做。
+
+```bash
+$PY $S/pdf_layout.py "<材料.pdf>" --pages 24-42          # 重建正文
+$PY $S/pdf_layout.py "<材料.pdf>" --pages 24-42 --geom    # 附坐标明细，逐条核对用
+$PY $S/pdf_layout.py "<材料.pdf>" --figs 3-40             # 定位插图区域
+$PY $S/pdf_layout.py "<材料.pdf>" --figs 18,21,29 --extract "<临时目录>"   # 导出插图 PNG
+```
+
+它做四件普通提取做不到的事：
+
+| 症状 | 几何依据 | 结果 |
+|------|---------|------|
+| 希腊字母、∑ ∫ ⋅ 全变空白 | SymbolMT 字体把字符塞在 U+F0xx 私有区 | 查 `references/symbol_map.json`（Adobe 官方编码表）还原成 `∑ ∫ ε Φ λ θ ⋅` |
+| 分式散架（`r e r qq F 2 21 0π4 1`） | 细长水平线 + 紧贴其上下、横向对齐的文本 | 还原成 `\frac{分子}{分母}` |
+| 上下标混进正文 | 字号更小 + 基线偏移 | 还原成 `_{i}` / `^{2}` |
+| 矢量箭头丢失（E 写成 E） | 一个浮在字母上方 ~27pt 的空 span（U+F076） | 还原成 `\vec{E}` |
+
+**判别分式横线的关键**：横线宽度必须和分子/分母宽度相当（`0.45W ≤ 线宽 ≤ 1.45W`）。
+PPT 模板的背景网格线全是细长横线，不加这条约束会把整段中文从中间劈成「分子/分母」。
+
+**还原率不是均匀的**：希腊字母、上下标通常能拼对，但**分式、根号、矢量箭头容易拼错**，
+写进笔记前必须按物理含义验算一遍数值关系。
+
+**版面重建给的是草稿，不是免检成品。** 它只解决「公式长什么样」，不解决「符号指代什么、坐标朝哪边」。
+重建后仍要自己判断符号的物理含义（如某个积分是否应为闭合积分、某个表达式是否为课件笔误）。
+**有视觉能力时仍要跑一遍 `renderpages.py` 用眼睛复核。**
+
+### B4 「无文本层」的页不能跳过
+
+脚本会在报告里列出页号（`疑似扫描页=[9,33,...]`）。
+它们多是章节封面/过渡页，但**也可能是手写答案页**——尤其紧跟「课堂练习」页之后时，
+一定要渲染来看，否则会漏掉材料里最值钱的答案：
+
+```bash
+$PY $S/renderpages.py "<材料.pdf>" --pages 9,33,45 --out "<目录>" --dpi 130
+```
+
+---
+
+## 附：同一份材料有多个版本时，先做版本对比
+
+两个版本之间常见「空白手写页被替换成文字版答案页」，用逐页序列比对定位新增页，比一页页翻省事得多：
+
+```bash
+# 两版提取稿各跑一次，按页切分后做序列比对，输出「哪些页是新增的」
+$PY - <<'EOF'
+import re, difflib
+def pages(p):
+    b = re.split(r"<!-- 第 (\d+) 页[^>]*-->", open(p, encoding="utf-8").read())
+    return ["\n".join(l.strip() for l in b[i+1].splitlines() if l.strip()) for i in range(1, len(b), 2)]
+old, new = pages("旧版提取稿.md"), pages("新版提取稿.md")
+print(len(old), "->", len(new))
+sm = difflib.SequenceMatcher(None, [x[:60] for x in old], [x[:60] for x in new], autojunk=False)
+for tag, i1, i2, j1, j2 in sm.get_opcodes():
+    if tag != "equal":
+        print(f"[{tag}] 旧 {i1+1}-{i2} → 新 {j1+1}-{j2}",
+              [new[k].splitlines()[:1] for k in range(j1, j2)][:6])
+EOF
+```

@@ -1,0 +1,24 @@
+# 全仓库强制 LF。
+# 脚本里有 `assert '\r\n' not in s` 这类硬约定（vaultio / pitfalls.md 都依赖它），
+# 而 Windows 版 Git 默认 core.autocrlf=true 会在 checkout 时把换行改成 CRLF，
+# 一 clone 就踩坑。这里显式声明，跨平台一致。
+* text=auto eol=lf
+
+*.py    text eol=lf
+*.md    text eol=lf
+*.json  text eol=lf
+*.txt   text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.sh    text eol=lf
+
+# 二进制：不做换行转换
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.pdf   binary
+*.pptx  binary
+*.docx  binary
+*.xlsx  binary
+*.zip   binary
