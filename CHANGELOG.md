@@ -6,11 +6,15 @@
 
 ## [Unreleased]
 
+### 新增
+- `.github/workflows/release.yml`：推 tag 或发布 Release 时，自动把「解压即用」的 skill zip
+  打包并挂到 Release 附件上；Release 不存在时会自动创建（标为 pre-release）。
+  附件由 `git archive` 从对象库导出，因此只含被跟踪的文件、换行符天然是 LF。
+
 ### 文档
-- README 安装章节扩为三种方式：`npx skills add`（推荐）/ `npx openskills install` /
-  `git clone`（含「clone 一份 + 软链给多个 agent」的写法），附各 agent 的 skill 目录对照表。
-- 补两条 FAQ：frontmatter 非标准键导致加载失败时**删哪一行**；
-  以及**为什么不做成 pip 包**（会破坏「脚本拷走即用」的跨 harness 根基）。
+- README 安装章节扩为三种方式：`npx skills add`（推荐）/ `npx openskills install` / `git clone`，
+  附各 agent 的 skill 目录对照表。
+- README 全文精简，只保留「是什么 / 怎么用 / 注意什么」。
 
 ## [0.1.0] - 2026-09-30
 

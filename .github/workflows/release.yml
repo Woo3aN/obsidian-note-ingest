@@ -1,0 +1,73 @@
+name: Release
+
+# 把「解压即用」的 skill zip 挂到 Release 附件上。
+# Release 不存在时会自动创建（0.x 一律标为 pre-release）。
+#
+# 触发方式三选一：
+#   1. 推 tag（v0.1.0 这种）—— 自动打附件
+#   2. 在网页上点 Publish release —— 自动打附件
+#   3. Actions 页手动 Run workflow（填个 tag 名）
+
+on:
+  push:
+    tags: ["v*"]
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要挂附件的 tag，例如 v0.1.0"
+        required: true
+        default: "v0.1.0"
+
+permissions:
+  contents: write
+
+jobs:
+  attach-zip:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: 解析 tag 与版本号
+        id: v
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "ver=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG  version=${TAG#v}"
+
+      # 只导出被 git 跟踪的文件，所以不会混进 .git / .github / __pycache__；
+      # 从对象库导出，换行符天然是 LF。
+      - name: 打包（解压即用的 skill zip）
+        run: |
+          git archive --format=zip \
+            --prefix=obsidian-note-ingest/ \
+            -o "obsidian-note-ingest-${{ steps.v.outputs.ver }}.zip" \
+            "${{ steps.v.outputs.tag }}" \
+            SKILL.md README.md CHANGELOG.md LICENSE requirements.txt \
+            scripts references tests
+
+      - name: 确保 Release 存在
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "${{ steps.v.outputs.tag }}" >/dev/null 2>&1 \
+            || gh release create "${{ steps.v.outputs.tag }}" \
+                 --title "${{ steps.v.outputs.ver }}" \
+                 --generate-notes --prerelease
+
+      - name: 上传附件
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ steps.v.outputs.tag }}" \
+            "obsidian-note-ingest-${{ steps.v.outputs.ver }}.zip" --clobber
+
+      - name: 结果
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release view "${{ steps.v.outputs.tag }}"
