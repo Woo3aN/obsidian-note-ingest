@@ -6,7 +6,9 @@
 
 ## [Unreleased]
 
-暂无。
+### 文档
+- **`references/` 去重**：pitfalls 的「多讲 / 多章笔记」节与 note-format 第六节重复（-42/+24 行）——
+  格式规范统一归 note-format（含新并入的「30 秒自查」），pitfalls 只留「出错了怎么办」。
 
 ## [0.1.1] - 2026-09-30
 

@@ -13,6 +13,26 @@
 - **改坏了先别慌，`vaultio` 每次写入都自动备份**：`backups` 列时间戳 → `restore --stamp`
   一键回滚，几十行的误删能在一分钟内恢复干净。
 
+- **批量改动一次做完：两个字典 + 整行锚点**（`INS` 插入 / `REP` 改写）：
+
+  ```python
+  lines = raw.split('\n')
+  for a in list(INS) + list(REP):
+      assert lines.count(a) == 1, f"锚点非唯一：{a[:60]!r}"   # 整行匹配，防子串误命中
+  out, used = [], set()
+  for ln in lines:
+      if ln in REP:
+          used.add(ln); out.extend(REP[ln].split('\n'))
+      else:
+          out.append(ln)
+          if ln in INS:
+              used.add(ln); out.extend(INS[ln].split('\n'))
+  assert used == set(INS) | set(REP)   # 防锚点写错后被静默跳过
+  ```
+
+  一次落盘 = 一次备份、一次 diff 核对、只问用户一遍。`lines.count()` 是整行匹配，
+  不会像 `s.count(old)` 那样被子串误命中。改完 diff 数 `<` 行：**删除行应只有 `REP` 那几行**。
+
 ## 行尾与文件编码
 
 - **写 vault 文件一律走 `vaultio.py`，别手工用 Python 写。** 脚本内部已强制 `newline="\n"`；
@@ -61,46 +81,6 @@
   ```
   **别用正则批量匹配图注**——图注里常出现 `A\*` 这类转义（`\*` 会截断 `[^*]*`）和含特殊字符的公式。
   改用**逐行状态机**（识别「空表头行 + 分隔行 + 图片行 + 图注行」四行一组），顺手剥掉单元格首尾的竖线。
-
-## 多讲 / 多章笔记
-
-- **多讲/多章笔记：每讲各带自己的 `[!info]` 范围 callout，别去改前一讲那个**
-  （`note-format.md` 第二节说「往这个 callout 里补一行」，只适用于**单讲**笔记的同一讲追加）。
-  同时把文末「下一讲」重排：**`（待建）` 的 wikilink 是死链、lint 会挂**，
-  多讲笔记里应改成「本笔记 N 讲：[[#第一讲…]] · [[#第二讲…]]」式导航 + 一句纯文本的下一讲说明。
-- **章末要点建议跟着各自的章走**（推荐的 vault 组织方式）：多章笔记里，把几章的 `[!summary]`
-  堆成文末一个「各章小结」会让读者来回跳。做法是每章末尾各落一块 `### 第N章 要点`
-  （带章号防锚点重名），插在该章最后一个 `---` 之前。详见 `references/note-format.md` 第六节末尾。
-  （若你的库习惯就是「文末统一小结」，按你的来——这一节的一致性靠自检，不靠硬性位置。）
-- **范围 callout 不要累积在第一章**：典型错误是把「**第二章 §2.1–§2.7**」整行写进第一章开头的
-  `> [!info] 本笔记范围`，还顺手改了它的来源/备注行。**章首 `[!info]` 范围 + 章末 `[!summary]` 小结，
-  各章管各章**；新增一章时，第一章的 callout 一行都不用动，新章自己在 `# 第N章 …` 下带一个
-  `> [!info] 第N章 本章范围`。
-  **落笔后的自查（30 秒）**：搜一遍前面几章的 callout，看有没有出现**后面章节**的行；
-  或直接数 `# 第N章` 的个数与 `[!info] 第N章 本章范围` 的个数是否相等。
-- **章末标题会重名**：`## 本章小结` / `## 习题与作业` 到第二章必然撞名。
-  做法：把第一章的改成 `## 第一章小结`，第二章用 `## 第二章小结`。改标题属「修改已有文字」，先跟用户说一声。
-- **新增一章时用新的 `#` 一级标题**与前一章平级（H1 = 章），比把整篇降级
-  （`#`→`##` 全线位移）改动小得多。
-- **批量改动一次做完：两个字典 + 整行锚点**（`INS` 插入 / `REP` 改写）：
-
-  ```python
-  lines = raw.split('\n')
-  for a in list(INS) + list(REP):
-      assert lines.count(a) == 1, f"锚点非唯一：{a[:60]!r}"   # 整行匹配，防子串误命中
-  out, used = [], set()
-  for ln in lines:
-      if ln in REP:
-          used.add(ln); out.extend(REP[ln].split('\n'))
-      else:
-          out.append(ln)
-          if ln in INS:
-              used.add(ln); out.extend(INS[ln].split('\n'))
-  assert used == set(INS) | set(REP)   # 防锚点写错后被静默跳过
-  ```
-
-  一次落盘 = 一次备份、一次 diff 核对、只问用户一遍。`lines.count()` 是整行匹配，
-  不会像 `s.count(old)` 那样被子串误命中。改完 diff 数 `<` 行：**删除行应只有 `REP` 那几行**。
 
 ## 其他
 
