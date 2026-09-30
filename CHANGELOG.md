@@ -6,7 +6,11 @@
 
 ## [Unreleased]
 
-暂无。
+### 文档
+- README 的安装章节改为**一键安装**：补 `npx skills add` / `npx openskills install` 两种方式，
+  手动 clone 降为兜底；并给出各 agent 的 skill 目录对照表。
+- 补两条 FAQ：frontmatter 非标准键导致加载失败时**删哪一行**；
+  以及**为什么不做成 pip 包**（会破坏「脚本拷走即用」的跨 harness 根基）。
 
 ## [0.1.0] - 2026-09-30
 

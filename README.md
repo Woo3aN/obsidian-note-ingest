@@ -42,17 +42,47 @@ PY="<你的 Python 解释器>"          # 建议 3.10+
 $PY -m pip install -r requirements.txt
 ```
 
-### 2. 作为 skill 安装
+### 2. 一键安装 skill
 
-把整个目录放进你的 skill 目录：
+**方式 A —— skills CLI（推荐）**，一条命令认领，支持 Claude Code / Codex / Cursor / Copilot /
+Gemini CLI / Windsurf / Cline 等 70+ 环境，会自动装到对应 agent 的目录：
 
-| 框架 | 位置 |
-|------|------|
-| Claude Code | `~/.claude/skills/`（用户级）或 `<项目>/.claude/skills/` |
+```bash
+npx skills add Woo3aN/obsidian-note-ingest          # 装到当前项目
+npx skills add Woo3aN/obsidian-note-ingest -g       # 装到用户级（所有项目可用）
+npx skills add Woo3aN/obsidian-note-ingest --list   # 只看仓库里有哪些 skill，不安装
+```
+
+**方式 B —— openskills**：
+
+```bash
+npx openskills install Woo3aN/obsidian-note-ingest
+npx openskills sync
+```
+
+**方式 C —— 手动**，把整个目录放进你的 skill 目录：
+
+```bash
+git clone https://github.com/Woo3aN/obsidian-note-ingest
+```
+
+| 框架 | skill 目录 |
+|------|------------|
+| Claude Code | `~/.claude/skills/` 或 `<项目>/.claude/skills/` |
+| Codex / Cursor / Copilot / Gemini CLI / Cline | `<项目>/.agents/skills/`（用户级见各自约定） |
 | WorkBuddy | `~/.workbuddy/skills/`（用户级）或 `<项目>/.workbuddy/skills/` |
-| 其他 CLI Agent | 多数约定 `~/.<agent>/skills/`；找不到约定目录时，**不装也行**——把 `SKILL.md` 当文档喂给模型、命令让它直接跑即可 |
+| 其他 CLI Agent | 没有约定目录时**不装也行**——把 `SKILL.md` 当文档喂给模型、命令让它直接跑即可 |
 
 各框架的 skill 目录约定不同，但吃的是同一份 `SKILL.md` + `scripts/`。
+
+> **加载失败怎么办**：若你的 harness 对 frontmatter 做严格校验、报「未知字段」，
+> 删掉 `SKILL.md` 第 4 行的 `description_en`（英文描述只用于展示，删掉不影响功能）即可；
+> 第 5 行 `agent_created` 若同样报错也可删。实测 `npx skills` 与 `openskills` 对这两个键都是容忍的。
+
+> **为什么不做成 pip 包**：能做，但不划算。`scripts/*.py` 之间靠 `sys.path` 互相引用
+> （`flatten_callouts.py` 要用 `vaultio`），打成 wheel 就得改成包内相对导入 ——
+> 那样「把脚本拷走、`python scripts/vaultio.py` 就能跑」这个根基就没了，
+> 而它正是这个 skill 能跨 harness 的原因。Python 依赖照旧走 `pip install -r requirements.txt`。
 
 ### 3. 确认你的 vault 能被发现
 
