@@ -4,9 +4,11 @@ name: Release
 # Release 不存在时会自动创建（0.x 一律标为 pre-release）。
 #
 # 触发方式三选一：
-#   1. 推 tag（v0.1.0 这种）—— 自动打附件
+#   1. 推 tag（形如 v0.2.0）—— 自动打附件
 #   2. 在网页上点 Publish release —— 自动打附件
-#   3. Actions 页手动 Run workflow（填个 tag 名）
+#   3. Actions 页手动 Run workflow（填一个**已存在**的 tag 名）
+#
+# 版本号规范见 CHANGELOG.md 开头：tag 是唯一版本来源，0.x 一律 pre-release。
 
 on:
   push:
@@ -16,9 +18,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "要挂附件的 tag，例如 v0.1.0"
+        description: "要挂附件的 tag —— 必须已存在，例如 v0.2.0"
         required: true
-        default: "v0.1.0"
+        type: string
 
 permissions:
   contents: write

@@ -1,8 +1,14 @@
 # Changelog
 
 本文件记录 obsidian-note-ingest 的主要变更。
-版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)：**0.x 表示尚未稳定**，
-脚本参数、文件结构与文档都可能继续变动。
+
+**版本号规范**（与 `.github/workflows/release.yml` 配套）：
+
+- 遵循[语义化版本](https://semver.org/lang/zh-CN/)，**git tag 是唯一的版本来源**：
+  tag 形如 `v0.2.0`（带 `v`），Release 名用 `0.2.0`（不带）。
+- **`0.x` 一律发布为 pre-release** —— 接口与文件结构仍可能变动，请只在能随时回滚的笔记库上使用。
+- 每个版本在这里写一节 `## [x.y.z] - YYYY-MM-DD`，发布时**自动截取该节作为 Release 说明**，
+  所以这一节要能脱离上下文读懂。
 
 ## [0.2.0] - 2026-10-07
 
