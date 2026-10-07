@@ -50,6 +50,24 @@ def slide_list(z):
     )
 
 
+def _md_table(rows: list[list[str]]) -> list[str]:
+    """把行列表渲染成能直接贴进笔记的 Markdown 表格。
+
+    两处细节和 `extract.py` 的 `_table_to_md` 保持一致：
+    补 `| --- |` 分隔行（缺了它 Obsidian 只会显示一堆竖线），
+    以及转义单元格里本来就有的 `|`（不转义会被数成多一列，lint 报列数不一致）。
+    """
+    if not rows:
+        return []
+    clean = [[c.replace("|", "\\|") for c in r] for r in rows]
+    width = max(len(r) for r in clean)
+    clean = [r + [""] * (width - len(r)) for r in clean]     # 合并单元格会参差不齐
+    out = ["| " + " | ".join(clean[0]) + " |",
+           "| " + " | ".join(["---"] * width) + " |"]
+    out += ["| " + " | ".join(r) + " |" for r in clean[1:]]
+    return out
+
+
 def dump_tables(z, out):
     lines = []
     for idx, name in slide_list(z):
@@ -64,8 +82,7 @@ def dump_tables(z, out):
                 rows.append(cells)
             if rows:
                 lines.append(f"\n<!-- slide {idx} 表格 -->")
-                for r in rows:
-                    lines.append("| " + " | ".join(r) + " |")
+                lines.extend(_md_table(rows))
     _write(out, "\n".join(lines))
 
 
@@ -118,9 +135,9 @@ def dump_shapes(path, out):
         for kind, val in items:
             if kind == "TABLE":
                 lines.append("**TABLE**")
-                for row in val.rows:
-                    lines.append("| " + " | ".join(
-                        c.text.replace("\n", " ").strip() for c in row.cells) + " |")
+                lines.extend(_md_table([
+                    [c.text.replace("\n", " ").strip() for c in row.cells]
+                    for row in val.rows]))
                 lines.append("")
             elif kind == "TXT":
                 lines.append("TXT: " + val.replace("\n", "\n     "))

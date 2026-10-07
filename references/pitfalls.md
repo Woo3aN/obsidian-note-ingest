@@ -7,31 +7,38 @@
 - **`check` 的退出码 10/11 不是故障**，是判定结果，按结论走（注意覆盖率虚高的例外，见 `SKILL.md` §3.4）。
 - **笔记里已有同名标题时 `insert` 会警告锚点冲突**——别硬插，改成合并进已有章节。
 - **插入前用 `outline` 确认锚点标题逐字一致**（含全角括号、中英文混排），写错就定位不到。
-- **备份按内容去重**：写入前的内容若与已有备份完全一致，vaultio 不再存一份，
-  于是「本次改前的版本」可能挂在**上一次写入的时间戳**底下。
-  跟用户报回滚路径前先按内容特征（行数、关键词计数）核对，别照时间戳想当然。
+- **备份按内容去重**：内容与**最近一份**备份完全相同时，`vaultio` 跳过不存，日志打
+  「内容与上一份备份相同，未新增」。所以**别拿时间戳当「改前版本」的凭证**——
+  要确认某份备份装的是不是你要的那版，按行数 / 关键词计数核一下。
+  （备份目录在 vault 里，vault 又常在同步盘上，会越堆越多：`backups --prune --keep 10` 清理。）
 - **改坏了先别慌，`vaultio` 每次写入都自动备份**：`backups` 列时间戳 → `restore --stamp`
   一键回滚，几十行的误删能在一分钟内恢复干净。
 
-- **批量改动一次做完：两个字典 + 整行锚点**（`INS` 插入 / `REP` 改写）：
+- **批量改动一次做完：`vaultio.py patch`**（别拆成十几次 `replace`）：
 
-  ```python
-  lines = raw.split('\n')
-  for a in list(INS) + list(REP):
-      assert lines.count(a) == 1, f"锚点非唯一：{a[:60]!r}"   # 整行匹配，防子串误命中
-  out, used = [], set()
-  for ln in lines:
-      if ln in REP:
-          used.add(ln); out.extend(REP[ln].split('\n'))
-      else:
-          out.append(ln)
-          if ln in INS:
-              used.add(ln); out.extend(INS[ln].split('\n'))
-  assert used == set(INS) | set(REP)   # 防锚点写错后被静默跳过
+  ```bash
+  $PY $S/vaultio.py patch "<笔记>" --edits-file edits.txt --dry-run   # 先预览
+  $PY $S/vaultio.py patch "<笔记>" --edits-file edits.txt             # 落盘
   ```
 
-  一次落盘 = 一次备份、一次 diff 核对、只问用户一遍。`lines.count()` 是整行匹配，
-  不会像 `s.count(old)` 那样被子串误命中。改完 diff 数 `<` 行：**删除行应只有 `REP` 那几行**。
+  `edits.txt` 里每处改动用三行隔开（多行内容不用转义），想「追加」就把原文一起写进新块：
+
+  ```
+  <<<<<<< OLD
+  （笔记里现有的原文，必须逐字符一致、且全文只出现一次）
+  =======
+  （换成什么）
+  >>>>>>> NEW
+  ```
+
+  **任一原文没有唯一命中 → 整批不落盘**，并逐条报出命中次数。一次落盘 = 一次备份、
+  一次 diff、只问用户一遍。改完看 diff 的 `<` 行：**该删的应该只有你写进 OLD 的那几条**。
+
+- **`toc` 只按笔记现有的排版重建。** 默认沿用现有目录的样子（分组式 / 平表式）；
+  认不出（比如手写的 `- [[#…]]` 列表）就**拒绝重建、一个字节都不动**，
+  让用户手工维护；真要换排版得显式给 `--group-by 0|1|2`。
+  **动手前先 `--dry-run`**：机械重建会把你手工排除过的板块（参考资料、本章小结）也带进来，
+  用 `--exclude 正则` 去掉。曾经它会静默把「### 第 N 章 …」的组标题拉平成普通条目、编号全乱。
 
 ## 行尾与文件编码
 
@@ -84,8 +91,13 @@
 
 ## 其他
 
-- **用户说「继续」却没说新材料在哪时，先按修改时间列一遍下载目录**：课件与录音稿往往
-  同一晚一起下载，`find <下载目录> -maxdepth 1 -type f -newermt "-3 days"` 一眼就能捞出来；
+- **用户说「继续」却没说新材料在哪时，按修改时间列一遍下载目录**：课件与录音稿往往
+  同一晚一起下载。**别用 `find -newermt`（Windows 没有）**，用跨平台的一行（只读，不写文件）：
+
+  ```bash
+  $PY -c "import pathlib,time;d=pathlib.Path.home()/'Downloads';ps=sorted(d.iterdir(),key=lambda p:-p.stat().st_mtime);[print(time.strftime('%m-%d %H:%M',time.localtime(p.stat().st_mtime)),p.name) for p in ps[:15]]"
+  ```
+
   把候选列给用户确认，比反问「材料在哪」快。
 - **材料只讲到一部分时**（如「就整理到录音截止的地方」）：只写已讲内容，未讲授部分在文末列一个
   `[!todo] 待上课整理` callout（保留课件原小节号和一句内容提要）；范围 callout 里注明「课堂只讲到此」；
@@ -98,6 +110,9 @@
 - **拿到带答案的材料时，回头核对已写进笔记的自算答案。** 上一轮「课件无答案 → 整理时自算」的解答，
   下一轮材料里可能就有官方版了。核完把标注从「整理时自做」改成「已与官方答案版核对」，
   并**明确告诉用户哪几题原本算错了**——这正是用户最在意的部分。
+- **同一份材料出了新版（答案版 / 修订版）时**：先 `pdfdiff.py 旧.pdf 新.pdf` 定位到改动过的那几页，
+  只渲染那几页看图核对，别通读两份。命中率高的话 `check` 会给退出码 13
+  （= 版本修订），按「逐处替换」处理，而不是当重复内容丢掉。
 - 脚本里裁图保存用 `PIL.Image.fromarray(crop).save(p)`；别用 `fitz.Pixmap(csRGB, IRect, bytes)`
   直接构造，新版 pymupdf 会报 `Unrecognised args`。
 - **callout 被空行截断的自检**（用 `replace` 写 callout 时最该看的）：`vaultio replace` 会自己处理——

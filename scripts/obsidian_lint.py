@@ -51,6 +51,8 @@ HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
 ANCHOR_LINK_RE = re.compile(r"\[\[#([^\]|]+)(?:\|[^\]]*)?\]\]")
 CALLOUT_RE = re.compile(r"^\s*>\s*\[!([A-Za-z-]+)\][+-]?")
 WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]*)?\]\]")
+# 引用块前缀（callout 里每一行都带 `> `，可能嵌套成 `> > `）
+QUOTE_PREFIX_RE = re.compile(r"^\s*(?:>\s*)+")
 
 
 class Report:
@@ -81,6 +83,8 @@ def slugify_anchor(title: str) -> str:
 def lint_text(text: str, report: Report) -> dict:
     lines = text.splitlines()
     headings: list[tuple[int, int, str]] = []  # (line_no, level, title)
+    quoted_titles: set[str] = set()            # 只写在 callout 里的标题
+    plain_titles: set[str] = set()             # 正文里的标题
     in_code = False
     fence_line = -1
     fence_char = ""
@@ -89,6 +93,11 @@ def lint_text(text: str, report: Report) -> dict:
     co_lines: list[tuple[int, str]] = []  # (行号, callout 类型小写)
 
     for i, line in enumerate(lines, 1):
+        # note-format 明确教人把表格放进 callout，而 `> ### 甲` 也是能当锚点的标题。
+        # 所以先剥掉引用块前缀再判标题 / 表格 —— 否则规范自己推荐的地方反而成了盲区。
+        bare = QUOTE_PREFIX_RE.sub("", line)
+        in_quote = bare != line
+
         m = FENCE_RE.match(line)
         if m:
             if not in_code:
@@ -100,15 +109,21 @@ def lint_text(text: str, report: Report) -> dict:
         if in_code:
             continue
 
-        h = HEADING_RE.match(line)
+        h = HEADING_RE.match(bare)
         if h:
-            headings.append((i, len(h.group(1)), re.sub(r"\s*#+\s*$", "", h.group(2)).strip()))
+            title = re.sub(r"\s*#+\s*$", "", h.group(2)).strip()
+            headings.append((i, len(h.group(1)), title))
+            if in_quote:
+                quoted_titles.add(slugify_anchor(title))
+            else:
+                plain_titles.add(slugify_anchor(title))
         else:
             # 表格列数：按「未被反斜杠转义的竖线」切分。
             # 单元格里的 \| 是字面竖线，而 extract.py 的 _table_to_md 正是这么转义的，
             # 用 split("|") 数会把工具链自己产出的表误报成「列数不一致」。
-            if line.strip().startswith("|") and line.strip().endswith("|"):
-                cells = re.split(r"(?<!\\)\|", line.strip())
+            stripped = bare.strip()
+            if stripped.startswith("|") and stripped.endswith("|"):
+                cells = re.split(r"(?<!\\)\|", stripped)
                 if cells and not cells[0].strip():
                     cells = cells[1:]
                 if cells and not cells[-1].strip():
@@ -207,12 +222,17 @@ def lint_text(text: str, report: Report) -> dict:
                              f"把例题、旁注、说明性内容降为正文（`flatten_callouts.py` 可批量处理）")
 
     # --- 死锚点
-    anchors = {slugify_anchor(t) for _, _, t in headings}
+    # callout 里的标题只提示、不判错：不同 Obsidian 版本对「引用块内的标题算不算锚点」
+    # 并不一致，报成错误会逼着把一条可能有效的链接删掉。
+    anchors = plain_titles | quoted_titles
     for i, line in enumerate(lines, 1):
         for m in ANCHOR_LINK_RE.finditer(line):
             target = slugify_anchor(m.group(1))
             if target not in anchors:
                 report.err(i, f"死链：[[#{m.group(1)}]] 找不到对应标题")
+            elif target not in plain_titles:
+                report.info(i, f"[[#{m.group(1)}]] 指向的标题写在 callout 里 —— "
+                               f"部分 Obsidian 版本不把它当锚点，建议把标题提到正文")
 
     # --- 表格列数
     for tbl in tables:

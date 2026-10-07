@@ -16,6 +16,17 @@
   8. SKILL.md 的 frontmatter 是合法 YAML（描述里的半角冒号不加引号会让 skill 加载不了）
   9. lint 不误报表格里的转义竖线 \\|，但对真·列数不一致仍要报警
  10. lint 对非 UTF-8 笔记要明确报错，而不是静默当乱码
+ 11. toc 必须保留「按章分组」的目录，不能拉平成平表（曾经会静默毁掉组标题）
+ 12. toc 认不出目录排版时必须拒绝重建，而不是猜一个
+ 13. patch 任一原文没唯一命中就整批不写
+ 14. patch 正常时一次落盘多处改动
+ 15. check 要能把「版本修订」和「换种讲法」区分开（退出码 13 vs 10）
+ 16. 备份按内容去重：内容没变时不再堆一份
+ 17. insert 空内容要被拦下（与 replace 一致），不能假成功还白写备份
+ 18. pptx_deep 的表格要带头分隔行、并转义单元格里的竖线
+ 19. renderpages --pages 要能接 extract --stats 打印的方括号列表
+ 20. extract --as-text 要原样保留纯文本笔记
+ 21. pdfdiff 能定位到有改动的页
 """
 
 from __future__ import annotations
@@ -72,9 +83,9 @@ def main() -> int:
 
     note = vault / "n.md"
     note.write_text("v1\n", encoding="utf-8", newline="\n")
-    b1 = vaultio.backup(note, vault)
+    b1, _ = vaultio.backup(note, vault)
     note.write_text("v2\n", encoding="utf-8", newline="\n")
-    b2 = vaultio.backup(note, vault)
+    b2, _ = vaultio.backup(note, vault)
     kept = sorted((vault / ".obsidian-note-backups").rglob("*.md"))
     check("同秒两次备份互不覆盖", b1 != b2 and len(kept) == 2,
           f"路径相同={b1 == b2} 留存={len(kept)}")
@@ -176,6 +187,143 @@ def main() -> int:
     out = r.stdout + r.stderr
     check("lint 报非 UTF-8 且不崩",
           "不是 UTF-8" in out and "Traceback" not in r.stderr)
+
+    # 11) toc 不得把「按章分组」的目录拉平成平表（曾经的静默数据损失）
+    toc_doc = vault / "toc.md"
+    toc_doc.write_text(
+        "# 某课程\n\n## 目录\n\n"
+        "### 第 1 章 甲\n1. [[#1.1 甲一]]\n\n"
+        "---\n\n"
+        "# 第 1 章 甲\n\n## 1.1 甲一\n\nA\n\n## 1.2 甲二\n\nB\n\n"
+        "---\n\n# 第 2 章 乙\n\n## 2.1 乙一\n\nC\n",
+        encoding="utf-8", newline="\n")
+    r = run(str(SCRIPTS / "vaultio.py"), "toc", str(toc_doc))
+    got = toc_doc.read_text(encoding="utf-8")
+    check("toc 保留分组式目录，不拉平成平表",
+          r.returncode == 0 and "### 第 2 章 乙" in got and "3. [[#2.1 乙一]]" in got,
+          f"exit={r.returncode}")
+    check("toc 不吞掉目录后面的 --- 分隔线", "\n---\n\n# 第 1 章 甲" in got)
+
+    # 12) toc 认不出排版时必须拒绝，而不是猜一个
+    toc2 = vault / "toc_odd.md"
+    odd = "# T\n\n## 目录\n\n- [[#甲]]\n\n## 甲\n\nA\n"
+    toc2.write_text(odd, encoding="utf-8", newline="\n")
+    r = run(str(SCRIPTS / "vaultio.py"), "toc", str(toc2))
+    check("toc 认不出排版时拒绝重建、一字不动",
+          r.returncode == 1 and toc2.read_text(encoding="utf-8") == odd,
+          f"exit={r.returncode}")
+
+    # 13) patch 正常：一次落盘多处改动
+    pat = vault / "pat.md"
+    pat.write_text("# N\n\nalpha\n\nbeta\n\ngamma\n", encoding="utf-8", newline="\n")
+    ed_ok = work / "ed_ok.txt"
+    ed_ok.write_text(
+        "<<<<<<< OLD\nalpha\n=======\nALPHA\n>>>>>>> NEW\n\n"
+        "<<<<<<< OLD\nbeta\n=======\nbeta\nplus\n>>>>>>> NEW\n",
+        encoding="utf-8", newline="\n")
+    r = run(str(SCRIPTS / "vaultio.py"), "patch", str(pat), "--edits-file", str(ed_ok))
+    after = pat.read_text(encoding="utf-8")
+    check("patch 一次落盘多处改动",
+          r.returncode == 0 and "ALPHA" in after and "beta\nplus" in after,
+          f"exit={r.returncode}")
+
+    # 14) patch 有任何一条不合格 → 整批不写（连前面合格的也不落盘）
+    ed_bad = work / "ed_bad.txt"
+    ed_bad.write_text(
+        "<<<<<<< OLD\ngamma\n=======\nGAMMA\n>>>>>>> NEW\n\n"
+        "<<<<<<< OLD\n根本不存在的一行\n=======\nY\n>>>>>>> NEW\n",
+        encoding="utf-8", newline="\n")
+    guard = pat.read_text(encoding="utf-8")
+    r = run(str(SCRIPTS / "vaultio.py"), "patch", str(pat), "--edits-file", str(ed_bad))
+    check("patch 有原文不唯一命中时整批不写",
+          r.returncode == 1 and pat.read_text(encoding="utf-8") == guard and "GAMMA" not in guard,
+          f"exit={r.returncode}")
+
+    # 15) check 要把「照抄原句的修订版」和「换种讲法」分开
+    s_a = "这是一个关于集合与映射的说明，用来测试查重判定是否工作。"
+    s_b = "由定义可知集合的元素满足映射关系，这一步不需要额外证明。"
+    body_txt = "\n\n".join([s_a] * 3 + [s_b] * 3)
+    ck = vault / "ck.md"
+    ck.write_text(f"# 某笔记\n\n## 某节\n\n{body_txt}\n", encoding="utf-8", newline="\n")
+    draft = work / "draft.md"
+    draft.write_text(body_txt + "\n", encoding="utf-8", newline="\n")
+    r = run(str(SCRIPTS / "vaultio.py"), "check", str(ck), "--content-file", str(draft))
+    check("check 把「原句照抄的新版本」判为 13（逐处替换，不是 10）",
+          r.returncode == 13, f"exit={r.returncode}")
+
+    # 16) 备份按内容去重
+    dedup = vault / "dedup.md"
+    dedup.write_text("同内容\n", encoding="utf-8", newline="\n")
+    _, w1 = vaultio.backup(dedup, vault)
+    b2, w2 = vaultio.backup(dedup, vault)
+    check("备份内容相同则跳过，不再堆一份快照",
+          w1 == "ok" and b2 is None and w2 == "same", f"{w1}/{w2}")
+
+    # 17) insert 空内容必须被拦下
+    empty = work / "empty.md"
+    empty.write_text("   \n\n", encoding="utf-8", newline="\n")
+    guard2 = doc.read_text(encoding="utf-8")
+    r = run(str(SCRIPTS / "vaultio.py"), "insert", str(doc),
+            "--anchor", "## 第一章", "--content-file", str(empty))
+    check("insert 空内容被拦下且不落盘",
+          r.returncode == 1 and doc.read_text(encoding="utf-8") == guard2,
+          f"exit={r.returncode}")
+
+    # 18) pptx_deep 的表格要能直接贴进笔记
+    import re as _re  # noqa: E402
+
+    import pptx_deep  # noqa: E402
+
+    md_rows = pptx_deep._md_table([["表头A|B", "表头C"], ["甲", "1"], ["乙"]])
+    md_txt = "\n".join(md_rows)
+
+    def _cells(row: str) -> list[str]:
+        return _re.split(r"(?<!\\)\|", row.strip())[1:-1]
+
+    check("pptx 表格有分隔行、转义竖线、补齐列数",
+          "| --- | --- |" in md_txt and "\\|" in md_txt
+          and all(len(_cells(r)) == 2 for r in md_rows), repr(md_rows))
+
+    # 19) renderpages --pages 要能吃下 extract --stats 打印的方括号列表
+    try:
+        import renderpages  # noqa: E402
+    except SystemExit:
+        print("  SKIP  renderpages（未安装 pymupdf）")
+    else:
+        got = renderpages.parse_pages("[4, 26, 54, 80]", 112)
+        check("renderpages --pages 接受方括号列表（可直接粘贴）",
+              got == [4, 26, 54, 80], str(got))
+
+    # 20) extract --as-text 要原样保留纯文本笔记
+    plain = work / "plain.md"
+    plain.write_text("# 我的笔记\n\n复习要点如下：\n\n1:20 例题：求特征值\n\n- 注意矩阵可逆\n",
+                     encoding="utf-8", newline="\n")
+    out2 = work / "plain.out.md"
+    run(str(SCRIPTS / "extract.py"), str(plain), "--as-text", "--out", str(out2))
+    txt = out2.read_text(encoding="utf-8")
+    check("extract --as-text 原样保留纯文本笔记（不丢时间戳之前的内容）",
+          "# 我的笔记" in txt and "复习要点如下" in txt, repr(txt[:50]))
+
+    # 21) pdfdiff 能定位到有改动的页
+    try:
+        import pymupdf  # noqa: E402
+    except ImportError:
+        print("  SKIP  pdfdiff（未安装 pymupdf）")
+    else:
+        def mkpdf(target, texts):
+            d = pymupdf.open()
+            for t in texts:
+                d.new_page().insert_text((72, 100), t, fontsize=14)
+            d.save(str(target))
+            d.close()
+
+        p1, p2 = work / "v1.pdf", work / "v2.pdf"
+        mkpdf(p1, ["Alpha content here.", "Beta content here."])
+        mkpdf(p2, ["Alpha content here.", "Beta content CHANGED."])
+        r = run(str(SCRIPTS / "pdfdiff.py"), str(p1), str(p2))
+        out = _re.sub(r"\s+", "", r.stdout + r.stderr)   # 输出里有补白，先抹平再比
+        check("pdfdiff 指认出被改动的那一页",
+              "第2页" in out and "第1页" not in out, out[-60:])
 
     print()
     if failures:

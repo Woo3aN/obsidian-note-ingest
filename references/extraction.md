@@ -171,21 +171,16 @@ $PY $S/renderpages.py "<材料.pdf>" --pages 9,33,45 --out "<目录>" --dpi 130
 
 ## 附：同一份材料有多个版本时，先做版本对比
 
-两个版本之间常见「空白手写页被替换成文字版答案页」，用逐页序列比对定位新增页，比一页页翻省事得多：
+新版常把「空白手写页」换成「文字版答案页」。**别通读两份提取稿**，先让脚本指出哪几页变了：
 
 ```bash
-# 两版提取稿各跑一次，按页切分后做序列比对，输出「哪些页是新增的」
-$PY - <<'EOF'
-import re, difflib
-def pages(p):
-    b = re.split(r"<!-- 第 (\d+) 页[^>]*-->", open(p, encoding="utf-8").read())
-    return ["\n".join(l.strip() for l in b[i+1].splitlines() if l.strip()) for i in range(1, len(b), 2)]
-old, new = pages("旧版提取稿.md"), pages("新版提取稿.md")
-print(len(old), "->", len(new))
-sm = difflib.SequenceMatcher(None, [x[:60] for x in old], [x[:60] for x in new], autojunk=False)
-for tag, i1, i2, j1, j2 in sm.get_opcodes():
-    if tag != "equal":
-        print(f"[{tag}] 旧 {i1+1}-{i2} → 新 {j1+1}-{j2}",
-              [new[k].splitlines()[:1] for k in range(j1, j2)][:6])
-EOF
+$PY $S/pdfdiff.py "<旧版.pdf>" "<新版.pdf>"
+$PY $S/pdfdiff.py "<旧版.pdf>" "<新版.pdf>" --threshold 0.9    # 判定更灵敏
 ```
+
+它逐页比文本（先抹掉空白差异，否则同一页重新导出就会整本报「变了」），列出相似度低于
+阈值的页，并给出**可直接粘给 `renderpages.py --pages` 的页码列表**——只渲染那几页看图核对即可。
+两版都抽不出文本的页（扫描件）单独归一类说明，不会混进「改动」列表让你白跑一趟。
+
+拿到新版后，回头核对上一轮**自算**的答案并把标注改成「已与官方答案版核对」
+（见 `pitfalls.md` 同名条目）。

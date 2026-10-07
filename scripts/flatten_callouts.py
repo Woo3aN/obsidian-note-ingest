@@ -169,9 +169,11 @@ def main() -> int:
         return 0
 
     if backup and which_vault_for:
-        b = backup(p, which_vault_for(p))
+        b, why = backup(p, which_vault_for(p))
         if b:
             print(f"[备份] {b}")
+        elif why == "same":
+            print("[备份] 内容与上一份备份相同，未新增")
     else:
         print("[警告] 备份模块未加载，本次改动没有备份——回滚请依赖版本控制或手工副本。",
               file=sys.stderr)

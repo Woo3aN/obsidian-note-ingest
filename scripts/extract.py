@@ -17,7 +17,9 @@ extract.py — 把各类学习材料统一提取成结构化 Markdown，供后�
 选项：
   --out FILE          结果写入文件（默认打印到 stdout）
   --gap SECONDS       字幕分段的停顿阈值，默认 2.5
-  --extract-images D  把 PPT/PDF 内嵌图片导出到目录 D，并在文本里插入引用
+  --extract-images D  把 **PPTX** 内嵌图片导出到目录 D，并在文本里插入引用
+                      （docx / pdf 暂不支持，会给出提示；PDF 取图请走 renderpages.py / pdf_panels.py）
+  --as-text           .txt / .md **强制按纯文本**处理，不走字幕解析
   --keep-ts           保留原始时间戳（默认丢弃）
   --no-despeak        关闭口语词清洗（默认开启轻度清洗）
   --stats             额外输出材料统计摘要（时长、段落数、疑似话题切换点）
@@ -103,6 +105,10 @@ TS_PATTERNS = [
     re.compile(r"^\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*(.*)$"),
 ]
 
+# 「这一页几乎没有文本层」的判定阈值，与 renderpages.py 保持一致，
+# 免得同一份 PDF 在两处给出不同的「疑似扫描页」名单。
+EMPTY_TEXT_CHARS = 20
+
 
 def parse_ts(token: str) -> float:
     """把 00:01:23,456 / 00:01:23.456 / 00:23 转成秒。"""
@@ -174,6 +180,26 @@ def parse_subtitles(text: str) -> list[tuple[float, str]]:
 
 def _cjk(ch: str) -> bool:
     return bool(ch) and "\u4e00" <= ch <= "\u9fff"
+
+
+def subtitle_prefix(text: str) -> str:
+    """第一个时间戳行**之前**的正文 —— 字幕解析会顺手把这部分丢掉。
+
+    一份普通笔记里偶然出现一行 `1:20 例题…`，就会被误判成字幕稿，
+    开头的小标题和说明整段消失。这里先把它捞出来，好在解析之后提醒使用者。
+    """
+    _, body = split_frontmatter(text)
+    if SRT_TIME.search(body):
+        return ""
+    kept: list[str] = []
+    for raw in body.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if any(p.match(line) for p in TS_PATTERNS):
+            return "\n".join(kept)
+        kept.append(line)
+    return ""
 
 
 SENT_END = "。！？!?…；;"
@@ -406,7 +432,7 @@ def extract_pdf(path: Path, img_dir: Path | None, keep_ts: bool) -> tuple[str, d
         txt = re.sub(r"[ \t]{2,}", " ", txt)
         txt = "\n".join(clean_inline(l) for l in txt.splitlines() if l.strip())
         total += len(txt)
-        if len(txt) < 20:
+        if len(txt) < EMPTY_TEXT_CHARS:
             empty_pages.append(i)
             pages.append(f"<!-- 第 {i} 页：无文本层，疑似扫描件或纯图片 -->\n（第 {i} 页需要直接看图）")
         else:
@@ -459,7 +485,9 @@ def main() -> int:
     ap.add_argument("--gap", default="auto",
                     help="字幕分段停顿阈值(秒)，默认 auto 按材料节奏自动推断")
     ap.add_argument("--max-para", type=int, default=320, help="单段落最大字数")
-    ap.add_argument("--extract-images", help="导出内嵌图片的目录")
+    ap.add_argument("--extract-images", help="导出内嵌图片的目录（仅 pptx 支持）")
+    ap.add_argument("--as-text", action="store_true",
+                    help=".txt/.md 强制按纯文本处理，不走字幕解析")
     ap.add_argument("--keep-ts", action="store_true", help="保留时间戳")
     ap.add_argument("--no-despeak", action="store_true", help="关闭口语词清洗")
     ap.add_argument("--stats", action="store_true", help="输出材料统计摘要")
@@ -480,6 +508,12 @@ def main() -> int:
 
     ext = path.suffix.lower()
     img_dir = Path(args.extract_images).resolve() if args.extract_images else None
+
+    # 说清楚哪条路走不通，别让 --extract-images 在 docx/pdf 上「成功」地什么都不做
+    if img_dir and ext in (".docx", ".pdf"):
+        print(f"[警告] --extract-images 目前只支持 pptx；{ext} 的图片不会被导出。", file=sys.stderr)
+        print("       PDF 取图请用 renderpages.py（整页渲染）或 pdf_panels.py（按面板裁）。",
+              file=sys.stderr)
 
     # 老版二进制格式：python-pptx / python-docx 打不开。先给一条能照做的提示，
     # 而不是让用户迎面撞上库内部的 PackageNotFoundError。
@@ -506,7 +540,7 @@ def main() -> int:
     elif ext in (".srt", ".vtt", ".txt", ".md", ".markdown"):
         text = read_text(path)
         fm, _ = split_frontmatter(text)
-        cues = parse_subtitles(text)
+        cues = [] if args.as_text else parse_subtitles(text)
         if cues:
             gap_val = gap_override if gap_override is not None else auto_gap(cues)
             paras = rebuild_paragraphs(cues, gap=gap_val, keep_ts=args.keep_ts,
@@ -518,6 +552,13 @@ def main() -> int:
             # 字数过少的"字幕"往往是普通笔记，直接原样返回更安全
             if len(body) < 50:
                 body = text
+            # 时间戳之前的内容没有承接者，会被丢掉 —— 说清楚，别让它悄悄消失
+            lost = subtitle_prefix(text)
+            if len(lost) > 40:
+                print(f"[警告] 第一个时间戳之前有 {len(lost)} 字内容没有对应的字幕行，已丢弃"
+                      f"（开头是 {lost.splitlines()[0][:36]!r}）。\n"
+                      f"       若这是普通笔记而不是字幕稿，加 --as-text 原样保留。",
+                      file=sys.stderr)
             meta = {
                 "类型": "字幕/转写稿",
                 "字幕行数": len(cues),

@@ -43,11 +43,22 @@ except ImportError:  # pragma: no cover
     sys.exit("[错误] 缺少 pymupdf：pip install pymupdf")
 
 
+# 「这一页几乎没有文本层」的判定阈值，与 extract.py 保持一致：
+# 两边都按「去空白后不足 20 字符」判定，免得同一份 PDF 给出两份不同的
+# 「疑似扫描页」名单。抽取库不同（pymupdf vs pypdf），结果可能有细微出入。
+EMPTY_TEXT_CHARS = 20
+
+
 def parse_pages(spec, total):
-    """'1,5,7-9' → [1,5,7,8,9]；越界页会被丢弃并提示。"""
+    """'1,5,7-9' → [1,5,7,8,9]；越界页会被丢弃并提示。
+
+    容忍从 `extract.py --stats` 直接复制过来的形式，带方括号也认
+    （它打印的是 Python 列表：`疑似扫描页=[4, 26, 54, 80]`）。
+    """
+    spec = spec.strip().strip("[](){}")          # 去掉整体方括号
     out = []
     for part in spec.split(","):
-        part = part.strip()
+        part = part.strip().strip("[](){}")      # 也去掉每个片段上残留的括号
         if not part:
             continue
         m = re.fullmatch(r"(\d+)\s*-\s*(\d+)", part)
@@ -59,7 +70,7 @@ def parse_pages(spec, total):
         elif part.isdigit():
             out.append(int(part))
         else:
-            sys.exit(f"[错误] 无法解析页码片段: {part!r}")
+            sys.exit(f"[错误] 无法解析页码片段: {part!r}（可用形式：3-23 / 1,5,7-9 / [1, 5, 7]）")
     seen, uniq = set(), []
     for p in out:
         if p not in seen:
@@ -101,11 +112,11 @@ def main():
         empty, withtext = [], []
         for i in range(total):
             txt = doc[i].get_text().strip()
-            (withtext if len(txt) >= 8 else empty).append(i + 1)
+            (withtext if len(txt) >= EMPTY_TEXT_CHARS else empty).append(i + 1)
         print(f"页数: {total}")
         print(f"有文本层 {len(withtext)} 页；无/几乎无文本层 {len(empty)} 页")
         if empty:
-            print(f"疑似扫描页/纯图片页: {empty}")
+            print(f"疑似扫描页={empty}")     # 与 extract.py --stats 同格式，可直接粘给 --pages
             print("→ 这些页必须渲染成图来看，别跳过")
         print("判定: " + (
             "文本层不完整，建议对上述页开识图模式"

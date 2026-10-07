@@ -10,7 +10,7 @@ vaultio.py — Obsidian vault 的安全读写层。
   find <vault> <关键词>                     在 vault 里找候选笔记（文件名/标题/tag/正文）
   outline <笔记路径>                        打印标题树 + 行号 + 锚点（供定位插入点）
   check <笔记路径> --content-file f.md       写入前查重（评估与已有内容的重复度）
-                                            退出码 10=已被覆盖 11=部分重叠 0=新内容
+                                            退出码 13=版本修订 10=已被覆盖 11=部分重叠 0=新内容
   read <笔记路径> [--head N]                读取笔记
   new <笔记路径> --title T [--tags a,b] [--source S] [--force]
                                             新建笔记（带 frontmatter 模板；已存在则拒绝，加 --force 覆盖）
@@ -20,10 +20,15 @@ vaultio.py — Obsidian vault 的安全读写层。
                                             冲突时报错退出（不落盘）
   append <笔记路径> --content-file f.md [--dry-run]
                                             追加到文件末尾
-  toc <笔记路径> [--section 目录]            按 ## / ### 重建目录索引区
-  backup <笔记路径>                          手动备份
-  backups <笔记路径>                         列出备份
-  restore <笔记路径> [--stamp STAMP]         从备份恢复
+  patch <笔记路径> --edits-file edits.txt [--dry-run]
+                                            一次落盘多处改动；任一原文未唯一命中则整批不写
+  toc <笔记路径> [--section 目录] [--group-by auto|0|1|2] [--exclude 正则] [--dry-run]
+                                            重建目录区。默认沿用现有排版（分组式 / 平表式）；
+                                            认不出排版就拒绝重建，不猜
+  backup <笔记路径>                          手动备份（内容与上一份相同则跳过）
+  backups <笔记路径> [--prune --keep N]      列出备份；--prune 清理旧备份
+  restore <笔记路径> [--stamp STAMP] [--dry-run]
+                                            从备份恢复
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import difflib
+import filecmp
 import json
 import os
 import re
@@ -156,15 +162,35 @@ def write_note(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8", newline="\n")
 
 
-def backup(path: Path, vault: Path) -> Path | None:
-    """把笔记备份到 <vault>/.obsidian-note-backups/<时间戳>/<相对路径>。"""
+def backup(path: Path, vault: Path) -> tuple[Path | None, str]:
+    """把笔记备份到 <vault>/.obsidian-note-backups/<时间戳>/<相对路径>。
+
+    返回 `(备份文件路径或 None, 说明)`，说明取值：
+
+      "ok"      已存一份新备份
+      "same"    内容与**最近一份**备份完全相同 —— 跳过，不重复堆快照
+      "absent"  源文件不存在
+
+    去重是必要的：同一秒连写几次、或写入没实际改动内容时，
+    旧实现会原地堆一串一模一样的快照；vault 在同步盘里时还会被重复上传。
+    """
     if not path.exists():
-        return None
-    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+        return (None, "absent")
     try:
         rel = path.relative_to(vault)
     except ValueError:
         rel = Path(path.name)
+
+    root = vault / BACKUP_DIRNAME
+    if root.exists():
+        for d in sorted((x for x in root.iterdir() if x.is_dir()), reverse=True):
+            prev = d / rel
+            if prev.exists():
+                if filecmp.cmp(prev, path, shallow=False):
+                    return (None, "same")
+                break        # 只跟最近一份比，够了
+
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     # 同一秒内多次写入不能互相覆盖：目录名被占用时追加 -02 / -03 …
     # 零填充是必要的：字符串序里 "-10" < "-2"，不补零的话同一秒备份超过 9 份时
     # restore 的「倒序取最新」会取错。
@@ -176,7 +202,7 @@ def backup(path: Path, vault: Path) -> Path | None:
     dest = dest_dir / rel
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(path, dest)
-    return dest
+    return (dest, "ok")
 
 
 def which_vault_for(path: Path) -> Path:
@@ -274,7 +300,85 @@ def insert_text(text: str, at: int, content: str) -> str:
 
 # ---------------------------------------------------------------- 目录重建
 
-def build_toc(text: str, levels=(2, 3)) -> str:
+# 目录区里的分组标题统一写成 '### <章名>'（note-format.md 第四节）。
+TOC_GROUP_PREFIX = "### "
+
+
+def find_toc_block(text: str, section: str = "目录") -> tuple[int, int] | None:
+    """定位 '## 目录' 区块，返回 (标题行号, 区块结束行号)，行号从 0 开始。"""
+    heads = parse_headings(text)
+    idx = next((i for i, h in enumerate(heads) if h["title"] == section), None)
+    if idx is None:
+        return None
+    cur, end = heads[idx], len(text.splitlines())
+    for h in heads[idx + 1:]:
+        if h["level"] <= cur["level"]:
+            end = h["line"]
+            break
+    return (cur["line"], end)
+
+
+def detect_toc_style(text: str, section: str = "目录") -> tuple[str, int | None]:
+    """识别已有目录的排版风格，好在重建时照原样来。
+
+    返回 (style, group_level)：
+
+      ("absent",  None)  还没有目录区 —— 可以按规范新建
+      ("grouped", 1|2)   分组式：'### 第 N 章 …' 作组标题，条目跨组连续编号
+      ("flat",    None)  平表式：H2 主项 'N.'、H3 子项 'N.M'
+      ("unknown", None)  认不出的排版 —— **不重建**，宁可留给用户手工维护
+    """
+    span = find_toc_block(text, section)
+    if span is None:
+        return ("absent", None)
+    block = text.splitlines()[span[0] + 1:span[1]]
+
+    # 组标题在目录区里本身就是 '#' 开头的行；要拿它的文字回正文里查真实层级
+    # （注意排除目录区自己那几行，否则查到的是目录里的 '###'，恒为 3）。
+    group_titles = []
+    for ln in block:
+        m = HEADING.match(ln.strip())
+        if m:
+            group_titles.append(re.sub(r"\s*#+\s*$", "", m.group(2)).strip())
+    if group_titles:
+        lvl = {h["title"]: h["level"] for h in parse_headings(text) if h["line"] >= span[1]}
+        for t in group_titles:
+            if t in lvl:
+                return ("grouped", lvl[t])
+        return ("unknown", None)
+
+    items = [ln for ln in block if "[[" in ln]
+    numbered = [ln for ln in items if re.match(r"^\s*\d+(?:\.\d+)*\.?\s*\[\[#", ln)]
+    if items and len(numbered) == len(items):
+        return ("flat", None)
+    return ("unknown", None)
+
+
+def toc_body_end(lines: list[str], span: tuple[int, int], section_level: int) -> int:
+    """目录区里「属于目录」的内容到哪一行为止。
+
+    区块尾部的 `---` 分隔线、空行之后的小节说明都不属于目录，
+    重建时要原样留着 —— 老实现按「到下一个标题为止」整段替换，会把 `---` 吃掉。
+    """
+    last = span[0]
+    for i in range(span[0] + 1, span[1]):
+        s = lines[i].strip()
+        if s == "" or "[[" in s:
+            last = i
+            continue
+        m = HEADING.match(s)
+        if m and len(m.group(1)) > section_level:   # 目录里的 '### 组标题'
+            last = i
+            continue
+        break                                        # 遇到 --- 等非目录内容，就此打住
+    return last
+
+
+def build_flat_toc(text: str, levels=(2, 3), exclude: re.Pattern | None = None) -> str:
+    """平表式目录：H2 主项 'N.'、H3 子项 'N.M'。
+
+    旧版 `toc` 的产物，库内还有笔记是这个排版，所以保留；新笔记应走分组式。
+    """
     heads = parse_headings(text)
     fm_end = frontmatter_span(text)[1]
     items = []
@@ -286,6 +390,8 @@ def build_toc(text: str, levels=(2, 3)) -> str:
             continue
         if h["title"].startswith("<!--"):
             continue
+        if exclude and exclude.search(h["title"]):
+            continue
         counters[h["level"]] = counters.get(h["level"], 0) + 1
         for deeper in [k for k in counters if k > h["level"]]:
             counters.pop(deeper, None)
@@ -296,30 +402,87 @@ def build_toc(text: str, levels=(2, 3)) -> str:
     return "\n".join(items)
 
 
-def rebuild_toc(text: str, section: str = "目录") -> tuple[str, int]:
-    """重建 '## 目录' 区块内容。返回 (新文本, 条目数)。"""
+def build_grouped_toc(text: str, group_level: int, section: str = "目录",
+                      exclude: re.Pattern | None = None) -> str:
+    """分组式目录：'### <章名>' 作组标题 + 跨组连续编号的条目。
+
+    这才是 `references/note-format.md` 第四节的规范格式。
+    """
     heads = parse_headings(text)
-    toc_head = None
-    for i, h in enumerate(heads):
-        if h["title"] == section:
-            toc_head = i
-            break
-    if toc_head is None:
-        return text, 0
+    span = find_toc_block(text, section)
+    if span is not None:
+        cut = span[0]
+    else:
+        # 还没有目录区：跳过笔记标题那一个 H1，别把它当成一个分组
+        cut = heads[0]["line"] if heads and heads[0]["level"] == 1 else -1
+    hs = [h for h in heads
+          if h["line"] > cut and h["title"] != section
+          and not h["title"].startswith("<!--")]
 
-    cur = heads[toc_head]
-    lines = text.splitlines()
-    end = len(lines)
-    for h in heads[toc_head + 1:]:
-        if h["level"] <= cur["level"]:
-            end = h["line"]
-            break
+    groups: list[list] = []
+    cur: list | None = None
+    for h in hs:
+        if h["level"] < group_level:
+            cur = None                    # 比分组更浅的标题（一般是笔记标题），不归入任何分组
+        if exclude and exclude.search(h["title"]):
+            if h["level"] <= group_level:
+                cur = None                # 整组被排除，它的子标题要一并跳过
+            continue
+        if h["level"] == group_level:
+            cur = [h["title"], []]
+            groups.append(cur)
+        elif h["level"] == group_level + 1 and cur is not None:
+            cur[1].append(h["title"])
 
-    toc = build_toc(text, levels=(2, 3))
+    out: list[str] = []
+    n = 0
+    for title, items in groups:
+        if not items:      # 没有子条目的分组不出现，免得留下孤立的组标题
+            continue
+        if out:
+            out.append("")
+        out.append(TOC_GROUP_PREFIX + title)
+        for t in items:
+            n += 1
+            out.append(f"{n}. [[#{t}]]")
+    return "\n".join(out)
+
+
+def rebuild_toc(text: str, section: str = "目录", group_by: str = "auto",
+                exclude: re.Pattern | None = None):
+    """重建 '## 目录' 区块。返回 (新文本, 行数, 拒绝原因或 None)。
+
+    默认沿用笔记现有目录的排版；认不出来时**拒绝重建**而不是猜一个，
+    因为把分组式目录拉平成平表会静默丢掉组标题和分组结构。
+    """
+    span = find_toc_block(text, section)
+    if span is None:
+        return (text, 0, f"笔记里没有 '## {section}' 区块")
+    heads = parse_headings(text)
+    section_level = next(h["level"] for h in heads if h["title"] == section)
+
+    if group_by == "auto":
+        style, lvl = detect_toc_style(text, section)
+        if style == "unknown":
+            return (text, 0, "目录排版认不出来（既没有 '### 组标题'，条目也不是编号列表）")
+        group_level = lvl if style == "grouped" else 0
+    else:
+        group_level = int(group_by)        # 0 = 平表
+
+    if group_level:
+        toc = build_grouped_toc(text, group_level, section, exclude)
+    else:
+        toc = build_flat_toc(text, exclude=exclude)
     if not toc:
-        return text, 0
-    new_lines = lines[:cur["line"] + 1] + [""] + toc.splitlines() + [""] + lines[end:]
-    return "\n".join(new_lines).rstrip("\n") + "\n", len(toc.splitlines())
+        return (text, 0, "没有可收录的标题")
+
+    lines = text.splitlines()
+    body_end = toc_body_end(lines, span, section_level)
+    tail = lines[body_end + 1:]
+    while tail and not tail[0].strip():     # 目录与后续内容之间只留一个空行
+        tail.pop(0)
+    new_lines = lines[:span[0] + 1] + [""] + toc.splitlines() + [""] + tail
+    return ("\n".join(new_lines).rstrip("\n") + "\n", len(toc.splitlines()), None)
 
 
 # ---------------------------------------------------------------- find
@@ -527,6 +690,8 @@ def check_duplicate(note_path: Path, content: str, threshold: float = 0.55) -> d
         "weak": [],          # 命中但只出现在标题 / 色块标题里的词（＝弱覆盖）
         "coverage": 0.0,
         "similar": [],
+        "units": 0,
+        "dup_ratio": 0.0,
     }
     if not note_path.exists():
         return result
@@ -556,9 +721,14 @@ def check_duplicate(note_path: Path, content: str, threshold: float = 0.55) -> d
     body_clean = strip_md("\n".join(body_lines))
     result["weak"] = [k for k in result["covered"] if k not in body_clean]
 
-    # 二级参考：字面高度重合的片段
+    # 二级参考：字面高度重合的片段。
+    # 由此得到的 dup_ratio（有近重复对应的内容单元占比）用来区分两件**动作完全相反**的事：
+    #   同一份材料的修订版 / 答案版 —— 句子被照抄，比值高 → 逐处替换
+    #   同批知识的另一种讲法        —— 换了措辞，比值低 → 融进已有章节
+    # 光看关键词覆盖率这两者都是 95%+，但前者要 patch、后者要并入，不能混为一谈。
     note_units = _units(note_clean)
-    for cu in _units(content_clean):
+    content_units = _units(content_clean)
+    for cu in content_units:
         best, match = 0.0, ""
         for nu in note_units:
             s = _sim(cu, nu)
@@ -566,6 +736,8 @@ def check_duplicate(note_path: Path, content: str, threshold: float = 0.55) -> d
                 best, match = s, nu
         if best >= threshold:
             result["similar"].append({"ratio": best, "new": cu, "old": match})
+    result["units"] = len(content_units)
+    result["dup_ratio"] = len(result["similar"]) / max(1, len(content_units))
     return result
 
 
@@ -602,10 +774,26 @@ def cmd_check(args) -> int:
         for s in sorted(r["similar"], key=lambda x: -x["ratio"])[:5]:
             print(f"      [{s['ratio']*100:.0f}%] {s['new'][:52]}")
 
-    print(f"\n  关键词覆盖率：{r['coverage']*100:.0f}%")
+    print(f"\n  关键词覆盖率：{r['coverage']*100:.0f}%"
+          f"（{len(r['covered'])}/{len(r['kws'])} 个术语已在笔记里）")
+    print(f"  句子级近重复：{r['dup_ratio']*100:.0f}%"
+          f"（{len(r['similar'])}/{r['units']} 个比较单元能在笔记里找到近重复）")
+
     if r["coverage"] >= 0.8:
+        if r["dup_ratio"] >= 0.6:
+            print("\n  → 判定【版本修订 / 答案版】：覆盖面高，且原句被照抄")
+            print("     这是一份材料的**新版**（答案版、修订版、补充版），不是重复整理。")
+            print("\n  动作：别整篇重写、也别丢；逐处替换变了的那些地方。")
+            print("    ① 两份提取文本 diff 一遍定位改动（PDF 用 pdfdiff.py 逐页比）")
+            print("    ② 把每条改动写成 edits.tsv，一次落盘：")
+            print(f'       $PY $S/vaultio.py patch "{note}" --edits-file edits.tsv')
+            print("    ③ 官方答案到手时，回头核对上一轮自算的答案，"
+                  "并**告诉用户哪几题原本算错了**")
+            print("     若逐处比对下来没有任何差异，说明这份材料已经在笔记里了，什么都不用做。")
+            return 13
         print("  → 判定：内容基本已被现有笔记覆盖，建议【不写】，只挑缺失术语补充")
-        print("\n  ⚠ 但这个判定只基于关键词重合，三种情况下会虚高：")
+        print("     （覆盖率虽高，但句子对不上 = 换了措辞的另一种讲法，不是新版）")
+        print("\n  ⚠ 这个判定只基于关键词重合，三种情况下会虚高：")
         print("      ① 笔记里有「待学 / 下次课内容」这类占位预告——术语被写进预告了，正文却没有")
         print("      ② 同一批知识点的两种讲述（课件 vs 课堂录音）——术语必然全重合")
         print("      ③ 术语只被当成小节标题用过")
@@ -698,6 +886,9 @@ def cmd_new(args) -> int:
     if not p.parent.exists():
         vault = which_vault_for(p)
         print(f"[提示] 目录不存在，将在 {vault.name} 内创建: {p.parent}")
+    if args.dry_run:
+        print(f"[试运行] 会新建 {p}（未写入；已存在时会被 --force 覆盖）")
+        return 0
     vault = which_vault_for(p)
     if p.exists():
         backup(p, vault)
@@ -730,9 +921,11 @@ def _apply_change(p: Path, new_text: str, what: str, do_diff: bool, dry_run: boo
                 print("\n--- 变更预览 ---")
                 print("\n".join(d[:120]))
         return 0
-    b = backup(p, vault)
+    b, why = backup(p, vault)
     if b:
         print(f"[备份] {b}")
+    elif why == "same":
+        print("[备份] 内容与上一份备份相同，未新增")
     write_note(p, new_text)
     print(f"[完成] {what} → {p}")
     if do_diff and old_text:
@@ -751,6 +944,9 @@ def cmd_insert(args) -> int:
         print(f"[错误] 笔记不存在: {p}", file=sys.stderr)
         return 1
     content = read_text_any(args.content_file)
+    if not content.strip():
+        print("[错误] 插入内容为空", file=sys.stderr)
+        return 1
     text = read_note(p)
     # 锚点唯一性：与 replace 保持一致，别静默插到「第一个」同名标题下面去
     anchor_hits = [l for l in text.splitlines() if l.strip() == args.anchor.strip()]
@@ -889,24 +1085,128 @@ def cmd_append(args) -> int:
     return _apply_change(p, new_text, f"已追加 {len(content)} 字符", args.diff, args.dry_run)
 
 
+# ---------------------------------------------------------------- 批量改动
+
+PATCH_OPEN, PATCH_SEP, PATCH_CLOSE = "<<<<<<< OLD", "=======", ">>>>>>> NEW"
+
+
+def parse_edits(text: str) -> list[tuple[str, str]]:
+    """解析批量编辑文件。
+
+    每处改动写成一节，用 git 冲突标记那套分隔符隔开 ——
+    多行内容不用转义，手写和阅读都最省事；也不必先想好往哪一行插：
+
+        <<<<<<< OLD
+        （笔记里现有的原文，必须唯一命中）
+        =======
+        （换成什么；想「追加」就把它连同原文一起写进来）
+        >>>>>>> NEW
+    """
+    lines = text.splitlines()
+    edits: list[tuple[str, str]] = []
+    i, n = 0, len(lines)
+    while i < n:
+        if not lines[i].strip():
+            i += 1
+            continue
+        if lines[i].strip() != PATCH_OPEN:
+            raise ValueError(f"第 {i + 1} 行应为 '{PATCH_OPEN}'，实际是 {lines[i][:40]!r}")
+        i += 1
+        old: list[str] = []
+        while i < n and lines[i].strip() != PATCH_SEP:
+            old.append(lines[i])
+            i += 1
+        if i >= n:
+            raise ValueError(f"第 {len(edits) + 1} 处改动缺少 '{PATCH_SEP}' 分隔行")
+        i += 1
+        new: list[str] = []
+        while i < n and lines[i].strip() != PATCH_CLOSE:
+            new.append(lines[i])
+            i += 1
+        if i >= n:
+            raise ValueError(f"第 {len(edits) + 1} 处改动缺少 '{PATCH_CLOSE}' 结束行")
+        i += 1
+        edits.append(("\n".join(old), "\n".join(new)))
+    return edits
+
+
+def cmd_patch(args) -> int:
+    """一次落盘多处改动：任一原文没唯一命中就整批不写。
+
+    取代「手写 Python 逐条 s.replace」——那条路没有自动备份，
+    还容易被 s.count(old) 的子串误命中坑到。
+    """
+    p = Path(args.note).expanduser().resolve()
+    if not p.exists():
+        print(f"[错误] 笔记不存在: {p}", file=sys.stderr)
+        return 1
+    try:
+        edits = parse_edits(read_text_any(args.edits_file))
+    except ValueError as e:
+        print(f"[错误] 编辑文件格式有问题：{e}", file=sys.stderr)
+        return 1
+    if not edits:
+        print("[错误] 编辑文件里一处改动都没有", file=sys.stderr)
+        return 1
+
+    text = read_note(p)
+    # 1) 全量校验：任一条不合格就整批不落盘（改一半最难收拾）
+    bad = [(i, o, text.count(o)) for i, (o, _) in enumerate(edits, 1) if text.count(o) != 1]
+    if bad:
+        print(f"[错误] {len(bad)} 处原文没有唯一命中，整批未落盘：", file=sys.stderr)
+        for i, o, c in bad:
+            head = o.splitlines()[0][:56] if o.splitlines() else "(空)"
+            print(f"   第 {i} 处：命中 {c} 次   {head!r}", file=sys.stderr)
+        print("       原文要跟笔记里逐字符一致（缩进、全角括号、空行都算）。", file=sys.stderr)
+        return 1
+
+    # 2) 按位置从后往前替换，避免前一处改动影响后一处的定位
+    spots = sorted((text.index(o), i, o, nw) for i, (o, nw) in enumerate(edits))
+    prev_end = -1
+    for start, i, o, _ in spots:
+        if start < prev_end:
+            print(f"[错误] 第 {i + 1} 处与上一处改动的区域重叠，整批未落盘", file=sys.stderr)
+            return 1
+        prev_end = start + len(o)
+    new_text = text
+    for start, _, o, nw in reversed(spots):
+        new_text = new_text[:start] + nw + new_text[start + len(o):]
+
+    return _apply_change(p, new_text, f"批量应用 {len(edits)} 处改动", True, args.dry_run)
+
+
 def cmd_toc(args) -> int:
     p = Path(args.note).expanduser().resolve()
     if not p.exists():
         print(f"[错误] 笔记不存在: {p}", file=sys.stderr)
         return 1
     text = read_note(p)
-    new_text, n = rebuild_toc(text, args.section)
-    if n == 0:
-        print(f"[跳过] 未找到 '## {args.section}' 区块，或没有可收录的标题")
+    exclude = re.compile(args.exclude) if args.exclude else None
+    new_text, n, why = rebuild_toc(text, args.section, args.group_by, exclude)
+    if why:
+        print(f"[拒绝重建] {why}", file=sys.stderr)
+        print("       目录一个字节都没动。要么手工维护，要么明确指定排版后重来：", file=sys.stderr)
+        print("         --group-by 0   平表：H2 主项 'N.'、H3 子项 'N.M'", file=sys.stderr)
+        print("         --group-by 1   按 H1 分组：'### 章名' + 跨组连续编号", file=sys.stderr)
+        print("         --group-by 2   按 H2 分组：'### 节名' + 跨组连续编号", file=sys.stderr)
+        return 1
+    if new_text == text:
+        print(f"[跳过] 目录已是最新（{n} 行）")
         return 0
-    return _apply_change(p, new_text, f"目录已重建（{n} 条）", True)
+    return _apply_change(p, new_text, f"目录已重建（{n} 行）", True, args.dry_run)
 
 
 def cmd_backup(args) -> int:
     p = Path(args.note).expanduser().resolve()
+    if not p.exists():
+        print("[跳过] 文件不存在")
+        return 0
     vault = which_vault_for(p)
-    b = backup(p, vault)
-    print(f"[备份] {b}" if b else "[跳过] 文件不存在")
+    b, why = backup(p, vault)
+    if b:
+        print(f"[备份] {b}")
+    else:
+        print("[跳过] 内容与上一份备份相同，未新增")
     return 0
 
 
@@ -922,11 +1222,32 @@ def cmd_backups(args) -> int:
         print("[无] 还没有任何备份")
         return 0
     found = sorted([d for d in root.iterdir() if d.is_dir()], reverse=True)
+    mine = [d for d in found if (d / rel).exists()]
     print(f"「{rel}」的备份：")
-    for d in found:
+    for d in mine:
         f = d / rel
-        if f.exists():
-            print(f"  {d.name}  ({f.stat().st_size} bytes)  {f}")
+        print(f"  {d.name}  ({f.stat().st_size} bytes)  {f}")
+
+    if not args.prune:
+        return 0
+
+    # --prune：只保留最近 --keep 份。备份目录在 vault 里，vault 又常在同步盘上，
+    # 不清理会一直堆（每次写入一份）并被反复上传。
+    stale = mine[args.keep:]
+    if not stale:
+        print(f"\n[prune] 共 {len(mine)} 份，未超过保留数 {args.keep}，无需清理")
+        return 0
+    extra = [d for d in found if d not in mine]      # 目录里其它笔记的备份，不动
+    print(f"\n[prune] 保留最近 {args.keep} 份，将删除 {len(stale)} 份"
+          f"（其余 {len(extra) + len(mine) - len(stale)} 份目录未触碰）：")
+    for d in stale:
+        print(f"   - {d.name}")
+    if args.dry_run:
+        print("[prune] 试运行，未删除")
+        return 0
+    for d in stale:
+        shutil.rmtree(d, ignore_errors=True)
+    print(f"[prune] 已删除 {len(stale)} 份")
     return 0
 
 
@@ -954,6 +1275,10 @@ def cmd_restore(args) -> int:
     if not pick:
         print(f"[错误] 找不到备份 {args.stamp}；可用: {[d.name for d in stamps]}")
         return 1
+    if args.dry_run:
+        print(f"[试运行] 会用备份 {pick.name} 覆盖 {p}（未写入）")
+        print(f"      备份文件: {pick / rel}")
+        return 0
     if p.exists():
         backup(p, vault)  # 回滚前先存当前版本
     shutil.copy2(pick / rel, p)
@@ -991,6 +1316,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--body-file")
     p.add_argument("--force", action="store_true",
                    help="笔记已存在时覆盖它（默认拒绝，不覆盖）")
+    p.add_argument("--dry-run", action="store_true", help="只说明会建在哪，不写入")
     p.set_defaults(func=cmd_new)
 
     p = sub.add_parser("check", help="写入前查重：比对待写内容与笔记已有内容")
@@ -1018,6 +1344,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-diff", dest="diff", action="store_false", help="不打印变更预览")
     p.set_defaults(func=cmd_append)
 
+    p = sub.add_parser("patch", help="一次落盘多处改动（任一原文不唯一命中则整批不写）")
+    p.add_argument("note")
+    p.add_argument("--edits-file", required=True,
+                   help="改动清单；每处用 '<<<<<<< OLD / ======= / >>>>>>> NEW' 三行隔开")
+    p.add_argument("--dry-run", action="store_true", help="只打印变更预览，不写入")
+    p.set_defaults(func=cmd_patch)
+
     p = sub.add_parser("replace", help="替换一个内容块")
     p.add_argument("note")
     p.add_argument("--anchor", help="起始行（整行精确匹配）；省略则从文件开头起")
@@ -1027,9 +1360,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--diff", action="store_true", default=True)
     p.set_defaults(func=cmd_replace)
 
-    p = sub.add_parser("toc", help="重建目录区")
+    p = sub.add_parser("toc", help="重建目录区（默认沿用现有排版；认不出就拒绝）")
     p.add_argument("note")
     p.add_argument("--section", default="目录")
+    p.add_argument("--group-by", choices=["auto", "0", "1", "2"], default="auto",
+                   help="auto=沿用现有排版；0=平表；1=按 H1 分组；2=按 H2 分组")
+    p.add_argument("--exclude", help="标题正则，命中的分组/条目不进目录（如 '参考资料|相关链接'）")
+    p.add_argument("--dry-run", action="store_true", help="只打印变更预览，不写入")
     p.set_defaults(func=cmd_toc)
 
     p = sub.add_parser("backup", help="手动备份")
@@ -1038,11 +1375,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("backups", help="列出备份")
     p.add_argument("note")
+    p.add_argument("--prune", action="store_true", help="只保留最近 N 份（默认 10），其余删除")
+    p.add_argument("--keep", type=int, default=10, help="--prune 时保留的份数（默认 10）")
+    p.add_argument("--dry-run", action="store_true", help="--prune 时只列出将删除的目录")
     p.set_defaults(func=cmd_backups)
 
     p = sub.add_parser("restore", help="从备份恢复")
     p.add_argument("note")
     p.add_argument("--stamp")
+    p.add_argument("--dry-run", action="store_true", help="只说明会恢复哪一份，不写入")
     p.set_defaults(func=cmd_restore)
     return ap
 

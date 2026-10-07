@@ -22,8 +22,9 @@
 | 老课件公式是 **OLE 对象**，抽出来一片空白 | 从 PDF 文本层按**坐标几何**重建分式 / 上下标 / 矢量（`pdf_layout.py`） |
 | 公式型 PDF 提取出来**完全散架** | `renderpages.py` 渲染成图让模型看，或以版面几何重建 |
 | 课件插图**裁不干净**（切到文字、留一堆白边） | `pdf_panels.py` 按纯色面板找边界 |
-| 整理完发现**内容早就有了** / 灌了一堆重复 | `vaultio.py check` 查重，并附「覆盖率为什么会骗人」的判别法 |
-| 改笔记时**误删、行尾被改、callout 被截断** | 所有写入走 `vaultio.py`（强制 LF、自动备份、`--dry-run` 预览） |
+| 整理完发现**内容早就有了** / 灌了一堆重复 | `vaultio.py check` 查重；**同一材料出了新版会判成「版本修订」，不会当成重复丢掉** |
+| 材料出了**答案版 / 修订版**，不知道该改哪 | `pdfdiff.py` 逐页比对，直接给出变了的那几页 |
+| 改笔记时**误删、行尾被改、callout 被截断** | 写入一律走 `vaultio.py`（强制 LF、自动备份、`--dry-run`）；散落改动用 `patch` 一次落盘 |
 | 笔记写完**满页彩色块，重点反而没了** | `obsidian_lint.py` 量化色块密度 + `flatten_callouts.py` 一键降级 |
 
 `references/` 里是各环节的细节文档，另附几十条实战踩坑记录。
@@ -119,6 +120,12 @@ $PY scripts/vaultio.py check "某课程/某课程.md" --content-file draft.md
 $PY scripts/vaultio.py replace "某课程/某课程.md" \
     --anchor "### 某小节" --content-file draft.md --dry-run
 
+# 材料出了新版：指出哪几页变了（并给出可粘贴的页码列表）
+$PY scripts/pdfdiff.py "旧版.pdf" "新版.pdf"
+
+# 一处笔记要改很多地方：改动写进 edits.txt，一次落盘
+$PY scripts/vaultio.py patch "某课程/某课程.md" --edits-file edits.txt --dry-run
+
 # 体检一篇笔记
 $PY scripts/obsidian_lint.py "某课程/某课程.md"
 ```
@@ -151,6 +158,7 @@ obsidian-note-ingest/
 │   ├── extract.py         材料统一提取（pptx / docx / pdf / srt / vtt / txt → Markdown）
 │   ├── pptx_deep.py       PPTX 深层提取：表格 + OMML 公式 + 形状 + 按页编号图片
 │   ├── renderpages.py     PDF 整页渲染成 PNG
+│   ├── pdfdiff.py         两份同源 PDF 逐页比，指出改了哪几页
 │   ├── pdf_layout.py      版面几何重建公式 + 定位插图区域
 │   ├── pdf_panels.py      按纯色面板裁课件插图
 │   ├── obsidian_lint.py   笔记体检（死链 / 围栏 / 色块密度 / 表格列数 / 锚点）
@@ -162,7 +170,7 @@ obsidian-note-ingest/
 ## 自检
 
 ```bash
-$PY tests/smoke.py      # 12 项冒烟测试，全部在临时目录里跑，不碰你的 vault
+$PY tests/smoke.py      # 25 项冒烟测试，全部在临时目录里跑，不碰你的 vault
 ```
 
 `.github/workflows/ci.yml` 会在 **Linux + Windows** 上自动跑这套测试。
@@ -175,6 +183,7 @@ $PY tests/smoke.py      # 12 项冒烟测试，全部在临时目录里跑，不
 | `extract.py` | 一行命令把 pptx/docx/pdf/字幕 → Markdown |
 | `pptx_deep.py` | 课件 PPTX 专用：普通提取会漏的公式、表格、图，它全拿到 |
 | `renderpages.py` | PDF → PNG，用于「看图核对」 |
+| `pdfdiff.py` | 材料出了新版（答案版 / 修订版）时，直接指出哪几页变了 |
 | `pdf_layout.py` | 没有视觉模型时，用坐标把散架的公式拼回去 |
 | `pdf_panels.py` | 按面板颜色裁插图，切边最少 |
 | `obsidian_lint.py` | 写完跑一遍，死链和围栏错误必须为 0 |
