@@ -18,6 +18,8 @@ obsidian_lint.py — Obsidian 笔记语法体检。
   [警告] callout 类型拼写可疑
   [警告] LaTeX 宏 / 环境不在 KaTeX 支持列表（会渲染成红色原文，源码里看不出）
          白名单 references/katex_commands.json，用 scripts/gen_katex_allowlist.py 生成
+  [警告] `**` 渲染成字面量（加粗没生效）—— 需 markdown-it-py，缺了自动跳过
+         典型：`**术语（English）**后面`、`是**「引文」**：`
   [建议] 空章节（标题下没有任何内容）
   [建议] 连续 3 个以上空行 / 行尾空格
 """
@@ -60,6 +62,8 @@ QUOTE_PREFIX_RE = re.compile(r"^\s*(?:>\s*)+")
 MATH_CMD_RE = re.compile(r"\\([a-zA-Z@]+)")
 # \begin{xxx} / \end{xxx}
 MATH_ENV_RE = re.compile(r"\\(?:begin|end)\s*\{\s*([A-Za-z*]+)\s*\}")
+# 渲染后仍残留的强调定界符。排除连续 4 个以上下划线——`____` 是填空空位，本来就该显示成字面量。
+EMPH_LEFTOVER = re.compile(r"\*\*|(?<![*_])__(?![*_])")
 # KaTeX 支持的宏清单（由 gen_katex_allowlist.py 从 katex/src 生成）
 MATH_ALLOWLIST_PATH = Path(__file__).resolve().parent.parent / "references" / "katex_commands.json"
 _math_allowlist: tuple[set[str], set[str]] | None = None
@@ -173,6 +177,69 @@ def check_math(text: str, lines: list[str], report: Report) -> int:
         report.warn(lns[0], f"LaTeX 环境 {{{name}}} 不在 KaTeX 支持列表 → 渲染成红色原文（{where}）；"
                             f"改用 cases / aligned / matrix 等")
     return len(bad_cmds) + len(bad_envs)
+
+
+def mask_markup(text: str) -> str:
+    """把代码、公式、转义的强调符换成同长度的 x（保留换行与行数）。
+
+    顺序关键：**先屏蔽行内代码，再屏蔽转义**。否则 `` `\\` `` 这种「代码里正好是反斜杠」
+    会被「反斜杠 + 反引号」的转义规则先吃掉反引号，代码段配不成对、整行解析错乱。
+    """
+
+    def blank(m: re.Match) -> str:
+        return re.sub(r"[^\n]", "x", m.group(0))
+
+    text = re.sub(r"^[ \t]*(```|~~~)[\s\S]*?^[ \t]*\1[^\n]*$", blank, text, flags=re.M)
+    text = re.sub(r"`[^`\n]*`", blank, text)
+    text = re.sub(r"\$\$[\s\S]*?\$\$", blank, text)
+    text = re.sub(r"\$[^$\n]*\$", blank, text)
+    text = re.sub(r"\\[*_]", blank, text)
+    return text
+
+
+def check_emphasis(text: str, lines: list[str], report: Report) -> int:
+    """报出「渲染后仍是字面量」的 ** / __ —— 需要 markdown-it-py。
+
+    这是中文笔记的高频坑，而且**光看源码看不出来**：
+      `**工具调用（Tool Calling）**机制`  → 闭合 ** 前是标点、后紧跟文字 → 无法闭合
+      `是**「推理即计算」**：`            → 开启 ** 前是文字、后紧跟标点 → 无法开启
+    两处都会把 `**` 原样显示出来。直接渲染一遍再找残留，比用正则猜规则可靠得多。
+    """
+    try:
+        from markdown_it import MarkdownIt
+    except ImportError:
+        return -1                       # -1 = 没装解析器，跳过（不误报）
+    md = MarkdownIt("commonmark")
+    masked = mask_markup(text).splitlines()
+    bad: list[int] = []
+
+    for i, mline in enumerate(masked, 1):
+        if "**" not in mline and "__" not in mline:
+            continue
+        leftover = False
+
+        def walk(toks):
+            nonlocal leftover
+            for t in toks:
+                if t.type == "inline" and t.children:
+                    if any(c.type == "text" and c.content and EMPH_LEFTOVER.search(c.content)
+                           for c in t.children):
+                        leftover = True
+                if t.children:
+                    walk(t.children)
+
+        try:
+            walk(md.parse(mline))
+        except Exception:
+            continue
+        if leftover:
+            bad.append(i)
+
+    for ln in bad:
+        report.warn(ln, "`**` 渲染成了字面量（行内加粗没生效）→ "
+                        "把紧贴 ** 的标点移到外面（`**术语**（English）`、`「**术语**」`），"
+                        "或在其外侧补一个空格")
+    return len(bad)
 
 
 def lint_text(text: str, report: Report) -> dict:
@@ -356,6 +423,9 @@ def lint_text(text: str, report: Report) -> dict:
     # --- LaTeX 宏（KaTeX 白名单）
     n_bad_math = check_math(text, lines, report)
 
+    # --- 加粗没生效（`**` 渲染成字面量）
+    n_bad_emph = check_emphasis(text, lines, report)
+
     return {
         "lines": len(lines),
         "chars": len(text),
@@ -363,6 +433,7 @@ def lint_text(text: str, report: Report) -> dict:
         "tables": len(tables),
         "wikilinks": len(WIKILINK_RE.findall(text)),
         "bad_math": n_bad_math,
+        "bad_emph": n_bad_emph,
     }
 
 

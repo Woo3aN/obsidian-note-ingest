@@ -359,6 +359,29 @@ def main() -> int:
     n_math = out.count("[警告]")           # 该文件除 LaTeX 外没有别的告警
     check("lint 不误报合法公式与代码块内容", n_math == 2, f"LaTeX 告警 {n_math} 条（应为 2）")
 
+    # 24) 强调符号检查：加粗没生效的行要报出来，代码/公式/填空/正常加粗都不能误报
+    #     （回归：中文笔记里 `**术语（English）**后面` 会把 ** 原样显示出来）
+    emph_note = work / "emph.md"
+    emph_note.write_text(
+        "---\ntitle: T\ntags:\n  - x\n---\n\n# T\n\n"
+        "**工具调用（Tool Calling）**机制升级。\n\n"      # 坏：闭合 ** 前是标点、后紧跟文字
+        "一句话是**「推理即计算」**：规范化。\n\n"          # 坏：开启 ** 前是文字、后紧跟标点
+        "**正常的加粗**没问题。\n\n"                        # 好
+        "`**代码里的**` 不算。\n\n"                         # 好：行内代码
+        "填空 ____。\n\n"                                   # 好：填空空位
+        "$$A_nA_{n-1}$$\n",                                 # 好：公式里的下标
+        encoding="utf-8", newline="\n",
+    )
+    r = run(str(SCRIPTS / "obsidian_lint.py"), str(emph_note))
+    out = r.stdout + r.stderr
+    if "markdown_it" in out or "跳过" in out:
+        print("  SKIP  强调符号检查（未安装 markdown-it-py）")
+    else:
+        n_emph = out.count("渲染成了字面量")
+        check("lint 抓出没生效的 ** 加粗", n_emph == 2, f"报了 {n_emph} 条（应为 2）")
+        check("lint 不误报正常加粗 / 代码 / 填空 / 公式",
+              "第 13 行" not in out and "第 15 行" not in out)
+
     print()
     if failures:
         print(f"✗ {len(failures)} 项失败: {failures}")
