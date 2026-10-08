@@ -325,6 +325,40 @@ def main() -> int:
         check("pdfdiff 指认出被改动的那一页",
               "第2页" in out and "第1页" not in out, out[-60:])
 
+    # 22) 内容文件路径写错时给友好提示，而不是抛一整段 traceback
+    #     （回归：main() 早期只 catch ValueError，FileNotFoundError 会漏出去）
+    #     注意笔记本身要存在——否则命中的是「笔记不存在」(rc=1)，测不到这一条
+    note = work / "note.md"
+    note.write_text("# T\n\n## 某节\n\n正文\n", encoding="utf-8", newline="\n")
+    missing = work / "根本不存在.md"
+    for cmd, extra in (("check", ["--content-file"]),
+                       ("insert", ["--anchor", "## 某节", "--content-file"]),
+                       ("patch", ["--edits-file"])):
+        r = run(str(SCRIPTS / "vaultio.py"), cmd, str(note), *extra, str(missing))
+        blob = r.stdout + r.stderr
+        check(f"{cmd} 遇到不存在的文件给友好错误（非 traceback）",
+              r.returncode == 2 and "Traceback" not in blob and "[错误]" in blob,
+              f"rc={r.returncode}")
+
+    # 23) LaTeX 检查：KaTeX 不支持的宏/环境要报出来，正常公式与代码块不误报
+    #     （回归：笔记里写过 \nsubset，Obsidian 渲染成红色原文才被发现）
+    math_note = work / "math.md"
+    math_note.write_text(
+        "---\ntitle: T\ntags:\n  - x\n---\n\n# T\n\n"
+        "$$a \\nsubset b \\qquad \\begin{cases} x \\end{cases}$$\n\n"
+        "$$\\begin{nosuchenv} x \\end{nosuchenv}$$\n\n"
+        "$$x \\not\\subset y \\qquad \\mathbb{N}\\subseteq\\mathbb{Z}$$\n\n"
+        "```\n$fake \\nsubset code$\n```\n",
+        encoding="utf-8", newline="\n",
+    )
+    r = run(str(SCRIPTS / "obsidian_lint.py"), str(math_note))
+    out = r.stdout + r.stderr
+    check("lint 抓出 KaTeX 不支持的宏 \\nsubset", "\\nsubset" in out and "LaTeX 宏" in out)
+    check("lint 抓出 KaTeX 不支持的环境", "nosuchenv" in out and "LaTeX 环境" in out)
+    # 只能有这 2 条 LaTeX 告警：合法公式（\not\subset / cases / \mathbb）和代码块里的假公式都不能报
+    n_math = out.count("[警告]")           # 该文件除 LaTeX 外没有别的告警
+    check("lint 不误报合法公式与代码块内容", n_math == 2, f"LaTeX 告警 {n_math} 条（应为 2）")
+
     print()
     if failures:
         print(f"✗ {len(failures)} 项失败: {failures}")

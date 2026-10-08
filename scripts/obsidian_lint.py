@@ -16,6 +16,8 @@ obsidian_lint.py — Obsidian 笔记语法体检。
   [警告] 标题层级跳跃（## 直接到 ####）
   [警告] 表格列数不一致
   [警告] callout 类型拼写可疑
+  [警告] LaTeX 宏 / 环境不在 KaTeX 支持列表（会渲染成红色原文，源码里看不出）
+         白名单 references/katex_commands.json，用 scripts/gen_katex_allowlist.py 生成
   [建议] 空章节（标题下没有任何内容）
   [建议] 连续 3 个以上空行 / 行尾空格
 """
@@ -23,6 +25,7 @@ obsidian_lint.py — Obsidian 笔记语法体检。
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -53,6 +56,13 @@ CALLOUT_RE = re.compile(r"^\s*>\s*\[!([A-Za-z-]+)\][+-]?")
 WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]*)?\]\]")
 # 引用块前缀（callout 里每一行都带 `> `，可能嵌套成 `> > `）
 QUOTE_PREFIX_RE = re.compile(r"^\s*(?:>\s*)+")
+# LaTeX 宏：反斜杠 + 字母（`\\` 换行、`\,` 这类间距命令都不匹配，正好跳过）
+MATH_CMD_RE = re.compile(r"\\([a-zA-Z@]+)")
+# \begin{xxx} / \end{xxx}
+MATH_ENV_RE = re.compile(r"\\(?:begin|end)\s*\{\s*([A-Za-z*]+)\s*\}")
+# KaTeX 支持的宏清单（由 gen_katex_allowlist.py 从 katex/src 生成）
+MATH_ALLOWLIST_PATH = Path(__file__).resolve().parent.parent / "references" / "katex_commands.json"
+_math_allowlist: tuple[set[str], set[str]] | None = None
 
 
 class Report:
@@ -78,6 +88,91 @@ class Report:
 def slugify_anchor(title: str) -> str:
     """Obsidian 锚点匹配时基本是原样标题，这里只做去空白归一化。"""
     return re.sub(r"\s+", " ", title).strip()
+
+
+def load_math_allowlist() -> tuple[set[str], set[str]]:
+    """返回 (KaTeX 支持的宏, 支持的环境)。清单缺失时返回两个空集（跳过检查，不误报）。"""
+    global _math_allowlist
+    if _math_allowlist is None:
+        try:
+            data = json.loads(MATH_ALLOWLIST_PATH.read_text(encoding="utf-8"))
+            _math_allowlist = (set(data.get("commands", [])), set(data.get("environments", [])))
+        except Exception:
+            _math_allowlist = (set(), set())
+    return _math_allowlist
+
+
+def blank_code_fences(lines: list[str]) -> list[str]:
+    """把代码围栏内的内容换成空行（保留行数，行号不漂）。"""
+    out: list[str] = []
+    in_code, fence = False, ""
+    for line in lines:
+        m = FENCE_RE.match(line)
+        if m:
+            if not in_code:
+                in_code, fence = True, m.group(1)
+            elif m.group(1) == fence:
+                in_code = False
+            out.append("")
+            continue
+        out.append("" if in_code else line)
+    return out
+
+
+def find_math_spans(text: str) -> list[tuple[int, str]]:
+    """抽出 $$...$$ / $...$，返回 [(起始偏移, tex)]。
+
+    按配对定界符扫描，不能用 `[^$]+` —— `\\text{$P(x)$ …}` 里的嵌套 `$` 会被截断成假公式。
+    """
+    spans: list[tuple[int, str]] = []
+    n, i = len(text), 0
+    while i < n:
+        if text[i] != "$":
+            i += 1
+            continue
+        is_disp = text.startswith("$$", i)
+        delim = "$$" if is_disp else "$"
+        start = i + len(delim)
+        end = text.find(delim, start)
+        if end == -1:                       # 没配对，跳过
+            i = start
+            continue
+        tex = text[start:end]
+        if not is_disp and "\n" in tex:     # 行内公式不跨行
+            i = end + len(delim)
+            continue
+        spans.append((start, tex))
+        i = end + len(delim)
+    return spans
+
+
+def check_math(text: str, lines: list[str], report: Report) -> int:
+    """报出 KaTeX 不认识的宏 / 环境 —— 它们会渲染成红色原文。"""
+    cmd_allow, env_allow = load_math_allowlist()
+    if not cmd_allow:
+        return 0
+    blanked = "\n".join(blank_code_fences(lines))
+    bad_cmds: dict[str, list[int]] = {}
+    bad_envs: dict[str, list[int]] = {}
+    for pos, tex in find_math_spans(blanked):
+        ln = blanked.count("\n", 0, pos) + 1
+        for m in MATH_CMD_RE.finditer(tex):
+            name = "\\" + m.group(1)
+            if name not in cmd_allow:
+                bad_cmds.setdefault(name, []).append(ln)
+        for m in MATH_ENV_RE.finditer(tex):
+            if m.group(1) not in env_allow:
+                bad_envs.setdefault(m.group(1), []).append(ln)
+
+    for name, lns in bad_cmds.items():
+        where = f"第 {lns[0]} 行" if len(lns) == 1 else f"共 {len(lns)} 处，首个在第 {lns[0]} 行"
+        report.warn(lns[0], f"LaTeX 宏 {name} 不在 KaTeX 支持列表 → 渲染成红色原文（{where}）；"
+                            f"否定关系符用 \\not + 原符号（如 \\not\\subset）")
+    for name, lns in bad_envs.items():
+        where = f"第 {lns[0]} 行" if len(lns) == 1 else f"共 {len(lns)} 处，首个在第 {lns[0]} 行"
+        report.warn(lns[0], f"LaTeX 环境 {{{name}}} 不在 KaTeX 支持列表 → 渲染成红色原文（{where}）；"
+                            f"改用 cases / aligned / matrix 等")
+    return len(bad_cmds) + len(bad_envs)
 
 
 def lint_text(text: str, report: Report) -> dict:
@@ -190,15 +285,16 @@ def lint_text(text: str, report: Report) -> dict:
     # --- 色块密度（经验标准：全文每 20–25 行一个为健康）
     total_co = len(co_lines)
     if total_co and len(lines) > 60:
-        density = len(lines) / total_co
+        # 显示与判断都用同一位小数，避免出现「显示 20.0 却报偏多」的边界抖动
+        density = round(len(lines) / total_co, 1)
         tip = "把例题、旁注、说明性内容降为正文（`flatten_callouts.py` 可批量处理）"
         if density < 15:
             report.warn(co_lines[0][0],
-                        f"色块过密：{total_co} 个 / {len(lines)} 行 = 每 {density:.1f} 行一个"
+                        f"色块过密：{total_co} 个 / {len(lines)} 行 = 每 {density} 行一个"
                         f"（健康值 20–25）→ {tip}")
         elif density < 20:
             report.info(co_lines[0][0],
-                        f"色块偏多：{total_co} 个 / {len(lines)} 行 = 每 {density:.1f} 行一个"
+                        f"色块偏多：{total_co} 个 / {len(lines)} 行 = 每 {density} 行一个"
                         f"（健康值 20–25）→ {tip}")
 
     # --- 单个「最小小节」色块超标（note-format 的定义：有 #### 就按 #### 算，否则按 ### 算）
@@ -257,12 +353,16 @@ def lint_text(text: str, report: Report) -> dict:
             continue
         report.info(ln, f"空章节：'{title}' 下面还没有内容")
 
+    # --- LaTeX 宏（KaTeX 白名单）
+    n_bad_math = check_math(text, lines, report)
+
     return {
         "lines": len(lines),
         "chars": len(text),
         "headings": len(headings),
         "tables": len(tables),
         "wikilinks": len(WIKILINK_RE.findall(text)),
+        "bad_math": n_bad_math,
     }
 
 

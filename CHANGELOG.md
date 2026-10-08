@@ -10,6 +10,31 @@
 - 每个版本在这里写一节 `## [x.y.z] - YYYY-MM-DD`，发布时**自动截取该节作为 Release 说明**，
   所以这一节要能脱离上下文读懂。
 
+## [0.3.0] - 2026-10-08
+
+**起因是一个只有渲染才看得见的 bug**：笔记里写了 `\nsubset`，KaTeX 没这个宏，
+渲染成红色原文——2215 个公式里就这 2 处，看 Markdown 源码完全发现不了。
+
+### 新增
+
+- **`obsidian_lint.py` 查 LaTeX 宏与环境。** 白名单 `references/katex_commands.json`
+  （1096 个宏 / 33 个环境），由 `scripts/gen_katex_allowlist.py` 从 KaTeX 源码生成，
+  KaTeX 升级后重跑即可。代码块里的 `$...$` 不算公式，`\text{$P(x)$ …}` 的嵌套 `$` 也不会误报。
+
+### 修复
+
+- **`vaultio.py` 读写文件出错时给友好提示。** `main()` 原来只 catch `ValueError`，
+  而 `FileNotFoundError` 属 `OSError` —— `--content-file` / `--body-file` / `--edits-file`
+  路径写错会抛整段栈。现在统一成一行 `[错误] 读写文件失败：…`，退出码 2。
+- **色块密度不再边界抖动。** 显示用四舍五入、判断却用精确值，会出现「显示每 20.0 行一个」
+  仍报「偏多」。两者改用同一位小数。
+
+### 文档
+
+- 色块阈值措辞统一为**舒适区 2–3、可放宽到 5**（`SKILL.md` §3.6 原写「一般 2–5 个都正常」，
+  与其自身 CHANGELOG 矛盾）。
+- README 去掉写死的测试条数。
+
 ## [0.2.0] - 2026-10-07
 
 **改动来自一次真实使用的复盘**：一次修订有 17 处散落改动，`vaultio` 的 anchor/until 表达不了，

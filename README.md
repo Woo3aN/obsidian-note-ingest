@@ -152,6 +152,7 @@ obsidian-note-ingest/
 │   ├── pitfalls.md        故障排查（写入 / 行尾 / 围栏 / 多章）
 │   ├── note-format.md     笔记格式规范（frontmatter / 标题层级 / callout 上限 / 收尾三件套）
 │   ├── vault-profile.md   库档案**模板**（首次使用请先生成你自己的）
+│   ├── katex_commands.json KaTeX 支持的宏 / 环境白名单（lint 查公式用）
 │   └── symbol_map.json    Adobe Symbol 字体私有区码位表（公式重建用）
 ├── scripts/               独立命令行工具（核心能力都在这，可不依赖 Agent 直接跑）
 │   ├── vaultio.py         ★ 核心：库发现 / 定位 / 查重 / 插入替换 / 备份回滚
@@ -161,8 +162,9 @@ obsidian-note-ingest/
 │   ├── pdfdiff.py         两份同源 PDF 逐页比，指出改了哪几页
 │   ├── pdf_layout.py      版面几何重建公式 + 定位插图区域
 │   ├── pdf_panels.py      按纯色面板裁课件插图
-│   ├── obsidian_lint.py   笔记体检（死链 / 围栏 / 色块密度 / 表格列数 / 锚点）
-│   └── flatten_callouts.py 色块降级收口
+│   ├── obsidian_lint.py   笔记体检（死链 / 围栏 / 色块密度 / 表格列数 / 锚点 / LaTeX 宏）
+│   ├── flatten_callouts.py 色块降级收口
+│   └── gen_katex_allowlist.py 重新生成 katex_commands.json（KaTeX 升级后跑，需 Node）
 └── tests/
     └── smoke.py           冒烟测试：临时目录里跑，不碰你的 vault
 ```
@@ -170,7 +172,7 @@ obsidian-note-ingest/
 ## 自检
 
 ```bash
-$PY tests/smoke.py      # 25 项冒烟测试，全部在临时目录里跑，不碰你的 vault
+$PY tests/smoke.py      # 冒烟测试，全部在临时目录里跑，不碰你的 vault
 ```
 
 `.github/workflows/ci.yml` 会在 **Linux + Windows** 上自动跑这套测试。

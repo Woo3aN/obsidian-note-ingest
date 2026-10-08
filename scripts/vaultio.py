@@ -1396,6 +1396,11 @@ def main() -> int:
         # 编码不对之类的输入问题：给一行清楚的提示，而不是抛一整段栈
         print(f"[错误] {e}", file=sys.stderr)
         return 2
+    except OSError as e:
+        # --content-file / --body-file / --edits-file 路径写错、无权限、是个目录……
+        # 这些以前会抛出整段 FileNotFoundError 栈，让人以为脚本坏了。统一成一行提示。
+        print(f"[错误] 读写文件失败：{e}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
