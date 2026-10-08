@@ -450,35 +450,11 @@ $PY $S/vaultio.py backups "<笔记>" --prune --keep 10   # 清理旧备份（每
 
 ---
 
-## 附：仓库里有什么
+## 附：文件地图
 
-```
-obsidian-note-ingest/
-├── SKILL.md                ← 你正在读的：工作流主干
-├── README.md               安装 / 换机 / 命令行用法
-├── CHANGELOG.md            变更记录
-├── LICENSE                 MIT
-├── requirements.txt        依赖清单
-├── .gitattributes          强制 LF（跨平台一致，见文件内注释）
-├── .gitignore
-├── scripts/                独立命令行工具（核心能力都在这）
-│   ├── vaultio.py          ★ 库发现 / 定位 / 查重 / 插入替换 / 批量改 / 备份回滚
-│   ├── extract.py          材料统一提取（pptx / docx / pdf / srt / vtt / txt → Markdown）
-│   ├── pptx_deep.py        PPTX 深层提取：表格 + OMML 公式 + 形状 + 按页编号图片
-│   ├── renderpages.py      PDF 整页渲染成 PNG
-│   ├── pdfdiff.py          两份同源 PDF 逐页比，指出改了哪几页
-│   ├── pdf_layout.py       版面几何重建公式 + 定位插图
-│   ├── pdf_panels.py       按纯色面板裁课件插图
-│   ├── obsidian_lint.py    笔记体检（死链 / 围栏 / 色块密度 / 表格列数 / 锚点）
-│   └── flatten_callouts.py 色块降级收口
-├── tests/
-│   └── smoke.py            冒烟测试：`python tests/smoke.py`（临时目录里跑，不碰你的 vault）
-└── references/             按需阅读的细节文档
-    ├── extraction.md       提取：两条路线（文本提取 / PDF 重建）
-    ├── figures.md          配图：截取还是重画
-    ├── transcripts.md      录音稿 / 字幕稿
-    ├── pitfalls.md         故障排查
-    ├── note-format.md      笔记格式规范
-    ├── vault-profile.md    库档案**模板**（首次使用请先生成你自己的）
-    └── symbol_map.json     Symbol 字体私有区码位表（公式重建用）
-```
+- **`README.md`** —— 目录结构、各脚本用途、安装与换机（**文件清单的唯一来源**，不在别处再抄一份）
+- **`references/`** —— 按需读取的细节，主流程不必全看：
+  `extraction.md`（提取两条路线）· `figures.md`（配图：截取还是重画）·
+  `transcripts.md`（录音稿 / 字幕稿）· `pitfalls.md`（故障排查）·
+  `note-format.md`（笔记格式规范）· `vault-profile.md`（库档案）
+- **`tests/smoke.py`** —— 冒烟测试，临时目录里跑，不碰你的 vault
