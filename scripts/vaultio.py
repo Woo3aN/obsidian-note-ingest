@@ -1130,6 +1130,38 @@ def parse_edits(text: str) -> list[tuple[str, str]]:
     return edits
 
 
+def _closest_lines(text: str, needle: str, top: int = 2, floor: float = 0.6) -> list:
+    """找 text 里与 needle 最相似的行 —— patch 报「0 命中」时提示「你是不是想写这行」。
+
+    floor 有意定在 0.6：低于它的「候选」基本都是噪音（同一种 callout 头、同类标题），
+    只留一条也比甩出三条没关系的有用。
+    """
+    import difflib
+    key = needle.strip()
+    if not key:
+        return []
+    # 先查「行内片段」：把行首 '> ' / '- ' 等标记去掉后，是不是正好是某长行的后半段。
+    # （patch 是子串级匹配，这类锚点本来合法，只是行首标记抄多了 —— 2026-10-09 实测踩过）
+    stripped = "\n".join(re.sub(r"^\s*(?:>\s?|[-*+]\s|\d+[.、]\s)", "", ln)
+                         for ln in needle.splitlines()).strip()
+    if stripped and stripped != key:
+        hit = text.find(stripped)
+        if hit >= 0:
+            ln = text.count("\n", 0, hit) + 1
+            return [(1.0, ln, "行内片段：去掉行首标记（如 '> '）后正好是这一行的后半段，"
+                              "OLD 按去掉前缀的文本写")]
+    out = []
+    for i, line in enumerate(text.splitlines(), 1):
+        s = line.strip()
+        if not s:
+            continue
+        r = difflib.SequenceMatcher(None, key, s).ratio()
+        if r >= floor:
+            out.append((r, i, s))
+    out.sort(key=lambda x: -x[0])
+    return out[:top]
+
+
 def cmd_patch(args) -> int:
     """一次落盘多处改动：任一原文没唯一命中就整批不写。
 
@@ -1157,6 +1189,23 @@ def cmd_patch(args) -> int:
         for i, o, c in bad:
             head = o.splitlines()[0][:56] if o.splitlines() else "(空)"
             print(f"   第 {i} 处：命中 {c} 次   {head!r}", file=sys.stderr)
+            if c == 0:
+                # 0 命中多半是「手抄原文时差了一个字」——直接把最像的行摆出来
+                for r, ln, s in _closest_lines(text, o.splitlines()[0] if o.splitlines() else ""):
+                    print(f"       最像的是第 {ln} 行（相似度 {r:.2f}）：{s[:72]}", file=sys.stderr)
+            else:
+                # 命中多次 —— 列出全部位置，一眼看出该往 OLD 里补哪段上下文
+                lns, pos = [], 0
+                for _ in range(c):
+                    k = text.find(o, pos)
+                    if k < 0:
+                        break
+                    lns.append(text.count("\n", 0, k) + 1)
+                    pos = k + len(o)
+                uniq = sorted(set(lns))
+                shown = "、".join(str(x) for x in uniq[:8]) + ("…" if len(uniq) > 8 else "")
+                print(f"       它在第 {shown} 行出现过（共 {c} 次）—— "
+                      f"把 OLD 写长一点、带上前后文以区分", file=sys.stderr)
         print("       原文要跟笔记里逐字符一致（缩进、全角括号、空行都算）。", file=sys.stderr)
         return 1
 
