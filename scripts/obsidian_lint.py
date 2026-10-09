@@ -211,20 +211,23 @@ def check_emphasis(text: str, lines: list[str], report: Report) -> int:
         return -1                       # -1 = 没装解析器，跳过（不误报）
     md = MarkdownIt("commonmark")
     masked = mask_markup(text).splitlines()
-    bad: list[int] = []
+    bad: list[tuple[int, str]] = []
 
     for i, mline in enumerate(masked, 1):
         if "**" not in mline and "__" not in mline:
             continue
         leftover = False
+        snippet = ""
 
         def walk(toks):
-            nonlocal leftover
+            nonlocal leftover, snippet
             for t in toks:
                 if t.type == "inline" and t.children:
-                    if any(c.type == "text" and c.content and EMPH_LEFTOVER.search(c.content)
-                           for c in t.children):
-                        leftover = True
+                    for c in t.children:
+                        if c.type == "text" and c.content and EMPH_LEFTOVER.search(c.content):
+                            leftover = True
+                            if not snippet:
+                                snippet = c.content
                 if t.children:
                     walk(t.children)
 
@@ -233,12 +236,16 @@ def check_emphasis(text: str, lines: list[str], report: Report) -> int:
         except Exception:
             continue
         if leftover:
-            bad.append(i)
+            bad.append((i, snippet))
 
-    for ln in bad:
-        report.warn(ln, "`**` 渲染成了字面量（行内加粗没生效）→ "
-                        "把紧贴 ** 的标点移到外面（`**术语**（English）`、`「**术语**」`），"
-                        "或在其外侧补一个空格")
+    for ln, seg in bad:
+        msg = ("`**` 渲染成了字面量（行内加粗没生效）→ "
+               "把紧贴 ** 的标点移到外面（`**术语**（English）`、`「**术语**」`），"
+               "或在其外侧补一个空格")
+        seg = " ".join(seg.split())
+        if seg:
+            msg += f"；残留片段：{seg[:70]}"
+        report.warn(ln, msg)
     return len(bad)
 
 
@@ -403,7 +410,14 @@ def lint_text(text: str, report: Report) -> dict:
             continue
         widths = {n for _, n in tbl}
         if len(widths) > 1:
-            report.warn(tbl[0][0], f"表格列数不一致：本表出现 {sorted(widths)} 列")
+            msg = f"表格列数不一致：本表出现 {sorted(widths)} 列"
+            # 单元格里的公式若含 | ，会被当成列分隔符 —— 直接给出方向，省掉一轮排查。
+            for ln, _w in tbl:
+                if 1 <= ln <= len(lines) and re.search(r"\$[^$\n]*\|[^$\n]*\$", lines[ln - 1]):
+                    msg += ("；本表有单元格内的公式含 `|`（会被算作列分隔符）—— "
+                            "改成 `\\lvert…\\rvert` 或 `\\mid`（注意 `\\|` 是双竖线，不是「给定」）")
+                    break
+            report.warn(tbl[0][0], msg)
 
     # --- 空章节
     body_start = 0
