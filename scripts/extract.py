@@ -581,7 +581,12 @@ def main() -> int:
     result = "\n".join(header) + "\n\n" + body + "\n"
 
     if args.out:
-        Path(args.out).write_text(result, encoding="utf-8", newline="\n")
+        out = Path(args.out)
+        # 父目录不存在时自动建 —— 否则 write_text 直接 FileNotFoundError 抛栈，
+        # 而 extract 的手写临时稿常放在新建的子目录里（2026-10-11 踩）
+        if out.parent and not out.parent.exists():
+            out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(result, encoding="utf-8", newline="\n")
         print(f"[完成] 已写入 {args.out}  ({len(result)} 字符)")
         for k, v in meta.items():
             print(f"        {k}: {v}")

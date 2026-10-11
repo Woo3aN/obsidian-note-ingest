@@ -1130,6 +1130,38 @@ def parse_edits(text: str) -> list[tuple[str, str]]:
     return edits
 
 
+def _prefix_diagnose(text: str, old: str) -> tuple | None:
+    """0 命中时最强的线索：OLD 究竟在哪一行开始断开。
+
+    多行 OLD 块报 0 命中，九成是**只有个别行与磁盘不符**（最常见：凭记忆写，
+    笔记里其实没有那条 `---` 分隔线）。逐行累积做子串匹配，命中数从 1 掉到 0 的
+    那一行就是断点 —— 直接把它和笔记该位置的实际内容摆出来，比「自己猜哪行错了」有用得多。
+    """
+    lines = old.split("\n")
+    if len(lines) < 2:
+        return None
+    ok = 0
+    for k in range(1, len(lines) + 1):
+        if text.count("\n".join(lines[:k])) == 1:
+            ok = k
+        else:
+            break
+    if ok == 0 or ok >= len(lines):
+        return None
+    # 前 ok 行能唯一命中 → 用它的位置定位笔记里对应的实际内容
+    anchor = "\n".join(lines[:ok])
+    at = text.find(anchor)
+    if at < 0:
+        return None
+    tail = text[at + len(anchor):]
+    actual = []
+    for ln in tail.split("\n"):
+        if len(actual) >= 3:
+            break
+        actual.append(ln)
+    return (ok, lines[ok], actual, text.count("\n", 0, at) + 1)
+
+
 def _closest_lines(text: str, needle: str, top: int = 2, floor: float = 0.6) -> list:
     """找 text 里与 needle 最相似的行 —— patch 报「0 命中」时提示「你是不是想写这行」。
 
@@ -1190,9 +1222,22 @@ def cmd_patch(args) -> int:
             head = o.splitlines()[0][:56] if o.splitlines() else "(空)"
             print(f"   第 {i} 处：命中 {c} 次   {head!r}", file=sys.stderr)
             if c == 0:
-                # 0 命中多半是「手抄原文时差了一个字」——直接把最像的行摆出来
-                for r, ln, s in _closest_lines(text, o.splitlines()[0] if o.splitlines() else ""):
-                    print(f"       最像的是第 {ln} 行（相似度 {r:.2f}）：{s[:72]}", file=sys.stderr)
+                # 先做逐行前缀诊断：能定位到「第几行开始不符」时，这条线索最准
+                diag = _prefix_diagnose(text, o)
+                if diag:
+                    ok, mine, actual, base = diag
+                    print(f"       前 {ok} 行对得上（起自第 {base} 行），"
+                          f"**第 {ok + 1} 行开始不符**：", file=sys.stderr)
+                    print(f"         OLD 写的：{mine[:72]!r}", file=sys.stderr)
+                    for j, ln in enumerate(actual):
+                        print(f"         笔记实际：{ln[:72]!r}" if j == 0
+                              else f"                   {ln[:72]!r}", file=sys.stderr)
+                    print("       → 多半是凭记忆写 OLD 了。**重新 Read 一遍该位置，"
+                          "从磁盘复制原文**。", file=sys.stderr)
+                else:
+                    # 退到「最像的行」：手抄时差了一个字的情况
+                    for r, ln, s in _closest_lines(text, o.splitlines()[0] if o.splitlines() else ""):
+                        print(f"       最像的是第 {ln} 行（相似度 {r:.2f}）：{s[:72]}", file=sys.stderr)
             else:
                 # 命中多次 —— 列出全部位置，一眼看出该往 OLD 里补哪段上下文
                 lns, pos = [], 0
@@ -1206,7 +1251,8 @@ def cmd_patch(args) -> int:
                 shown = "、".join(str(x) for x in uniq[:8]) + ("…" if len(uniq) > 8 else "")
                 print(f"       它在第 {shown} 行出现过（共 {c} 次）—— "
                       f"把 OLD 写长一点、带上前后文以区分", file=sys.stderr)
-        print("       原文要跟笔记里逐字符一致（缩进、全角括号、空行都算）。", file=sys.stderr)
+        print("       原文要跟笔记里逐字符一致（缩进、全角括号、空行都算）；"
+              "写 OLD 一律从 Read 结果复制，别凭记忆。", file=sys.stderr)
         return 1
 
     # 2) 按位置从后往前替换，避免前一处改动影响后一处的定位

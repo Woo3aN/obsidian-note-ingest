@@ -239,7 +239,23 @@ def main() -> int:
           r.returncode == 1 and pat.read_text(encoding="utf-8") == guard and "GAMMA" not in guard,
           f"exit={r.returncode}")
 
-    # 15) check 要把「照抄原句的修订版」和「换种讲法」分开
+    # 15) patch 多行 OLD 只有中间某行不符 → 要指出「第几行开始不符」，不是干巴巴一句 0 命中
+    #      （2026-10-11 实测踩：insert 之后凭记忆写 OLD，笔记里其实没有那条 ---）
+    diag = vault / "diag.md"
+    diag.write_text(
+        "# N\n\n### 小节\n\n| a | b |\n| --- | --- |\n| 甲 | 乙 |\n\n## 下一节\n\n正文\n",
+        encoding="utf-8", newline="\n")
+    ed_diag = work / "ed_diag.txt"
+    ed_diag.write_text(
+        "<<<<<<< OLD\n### 小节\n\n| a | b |\n| --- | --- |\n| 甲 | 乙 |\n\n---\n\n## 下一节\n"
+        "=======\n改好了\n>>>>>>> NEW\n",
+        encoding="utf-8", newline="\n")
+    r = run(str(SCRIPTS / "vaultio.py"), "patch", str(diag), "--edits-file", str(ed_diag))
+    check("patch 0 命中时做逐行前缀诊断（指出第几行开始不符）",
+          r.returncode == 1 and "行开始不符" in r.stderr and "---" in r.stderr,
+          f"exit={r.returncode}")
+
+    # 16) check 要把「照抄原句的修订版」和「换种讲法」分开
     s_a = "这是一个关于集合与映射的说明，用来测试查重判定是否工作。"
     s_b = "由定义可知集合的元素满足映射关系，这一步不需要额外证明。"
     body_txt = "\n\n".join([s_a] * 3 + [s_b] * 3)
