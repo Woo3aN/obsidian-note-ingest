@@ -1,6 +1,7 @@
 # 故障排查
 
-> 本文是 `SKILL.md` §5 的展开。**何时读**：写入报错、笔记被改坏了、lint 报了看不懂的行号时。
+> 本文是 `SKILL.md` §5 的展开。**何时读**：写入报错、笔记被改坏了、lint 报了看不懂的行号，
+> 或要做「挪动段落 / 整章重排」这类 vaultio 表达不了的编辑时。
 
 ## 写入相关
 
@@ -46,6 +47,133 @@
   让用户手工维护；真要换排版得显式给 `--group-by 0|1|2`。
   **动手前先 `--dry-run`**：机械重建会把你手工排除过的板块（参考资料、本章小结）也带进来，
   用 `--exclude 正则` 去掉。曾经它会静默把「### 第 N 章 …」的组标题拉平成普通条目、编号全乱。
+
+## 写入细节（`patch` / `replace` 的坑与绕路方案）
+
+**改写单行（frontmatter、callout 内一行、正文某句）必须配 `--until`，值取同一个 anchor**：
+
+```bash
+$PY $S/vaultio.py replace "<笔记>" --anchor "X" --until "X" --content-file "<新内容>" --dry-run
+```
+
+这类行**不受「下一个标题」约束**，省略 `--until` 会一路替换到下一个 `##` 之前，把中间若干行全吃成一行。
+**症状是 `--dry-run` 的 diff 里出现你没打算动的行。**
+**动作：凡是改单行，一律 `--dry-run` 先看「第 X–Y 行」，`X != Y` 就说明范围超了，立刻补 `--until`。**
+
+**`--until` 是「子串包含」匹配，不是整行匹配**，所以：
+
+- 想匹配**代码块收尾围栏**时，它会先命中开头的 ` ```text ` 行（那行本身含三个反引号），
+  于是只替换开头一行、把代码块拆散。正解：把 `--anchor` 往前挪到代码块的**上一段**，再配 `--until "```"`。
+- **`--until "---"` 会吃掉一大段**：笔记里的**表格分隔行 `|------|------|` 也包含 `---`**，会被先命中。
+  **`--until` 只用于独一无二的文字锚点**；`---` / ` ``` ` / `|` 这类全文反复出现的字符一律换成一句独有的正文。
+  argparse 会把 `---` 当选项，必须写成 `--until=---`。
+
+**`replace` 的 content 要分清「追加」还是「改写」**（写错很隐蔽）：
+
+- **追加**（往范围 callout 补一行、往某段后加一段）：`content = 原行 + "\n" + 新行`
+- **改写**（改 frontmatter 日期、换掉「下一章」链接）：`content = 新行`，**绝不要把原行也带上**
+
+图省事把两种情况统一写成「原行 + 新行」，会导致 frontmatter 出现**两个 `updated:` 键**、
+「相关链接」出现**两行「下一章」**；YAML 重复键不报错，Obsidian 也只会静默取其一。
+**改完务必 `diff` 一遍，看到「本该被替换的行还在」就要警觉。**
+
+**在段落尾部「追加」时极易把句子焊死。** 若把某句当成追加锚点，新内容会在句号处接上旧句子的剩余部分，
+产生「……价值估计。：无论是一般搜索问题还是……」这种双标点乱句。
+**lint 不会报**、diff 也只显示「删 1 行加 1 行」，**只有自己再读一遍才看得见**。
+**动作**：凡是在段落尾部追加，追加完把那一整段连同**下一段开头**一起读一遍；
+或者干脆改掉整段（`content = 新全文`）而不是在尾巴上接。
+
+**`insert --at end-of-section` 会插到章节末尾那条 `---` 之后**（`section_bounds` 只回退连续空行，
+不回退分隔线）。想插在分隔线**之前**，用下面 §3.5.1 的字节级替换。
+
+> [!warning] 写 `OLD` 一律**从 Read 结果复制**，绝不凭记忆（2026-10-11 踩）
+> `patch` 是**纯子串匹配**：`OLD` 里多一行、少一条 `---`、空行位置不同，就整块 0 命中。
+> **最常见的中招场景**：刚跑完 `insert`，接着写 `patch` —— 记忆里还是改动前的排版，
+> 而磁盘上那一段的真实排版已经变了（`insert` 会把内容接在上一节末尾，
+> 你可能以为中间有条 `---`，其实没有）。
+>
+> **动作：每写一处 `OLD`，都先 `Read` 该位置再复制。前一步改过文件的话，必须重新读。**
+> 报 0 命中时脚本会做**逐行前缀诊断**，直接告诉你「前 N 行对得上、第 N+1 行开始不符」并
+> 并排打印「OLD 写的」与「笔记实际」——照它改那一行即可。
+
+- **想插到标题 A 之前**（只有这两个 `--at`，没有 `before-heading`）：
+  优先用「**A 上面那个同级或更高级标题**」做锚点 + `--at end-of-section` ——
+  「上一节的末尾」就是「下一节的开头」。
+  ⚠️ 这条绕法**只在上一节确实以更细标题结尾时成立**；H2 之间没有 `###` 时它不成立，
+  只能退回 §3.5.1 的字节级替换（**那条路没有自动备份**，动手前先手工备份）。
+
+### 绕路 A：挪动段落（字节级精确替换）
+
+vaultio 的 anchor/until 模型表达不了「把某段搬到别处」。**先试 `patch`**：删一处 + 在别处插一处，
+两条各写一节就行，而且照样有自动备份。只有 `patch` 也表达不了时，才手写字节级替换：
+
+```python
+s = io.open(p, 'rb').read().decode('utf-8')
+assert '\r\n' not in s, 'CRLF 混入'            # 先确认行尾没被改
+assert s.count(old) == 1, '模式不唯一，中止'   # 唯一性断言是关键，错了就报错而不是乱改
+io.open(p, 'wb').write(s.replace(old, new).encode('utf-8'))
+```
+
+注意 `'rb'` 读、`'wb'` 写——这样不经过 Windows 的换行翻译，LF 不会被改成 CRLF。
+**这条路绕过了 vaultio，没有自动备份**，动手前先手工备份一份。
+
+### 绕路 B：重排 / 重编号一整章（切段重写）
+
+给「原来只有无编号标题、现在要正式编成 §3.1~§3.10」这类章节排号时，
+`insert` / `replace` 的 anchor-until 模型表达不了「旧标题改名 + 新块插入 + 后续编号整体位移」。
+patch 式做法的典型翻车：新旧编号撞车（文件里同时存在两个 `## 3.1`），lint 报「同级重复标题」。
+
+**正解：把笔记切成三段 —— head（章前）/ 本章 / tail（章后的小结+相关链接），本章整段重写成干净文本，
+再三段拼回。**
+
+```python
+N = "<笔记路径>"
+s = io.open(N, 'rb').read().decode('utf-8')
+i, j = s.index('# 第三章 某主题'), s.index('## 第三章小结')
+
+os.makedirs('_parts', exist_ok=True)
+io.open('_parts/head.md', 'wb').write(s[:i].encode('utf-8'))    # 章前
+io.open('_parts/tail.md', 'wb').write(s[j:].encode('utf-8'))    # 章后
+
+# ① 把本章重写成干净文本 → _parts/ch.md（旧的 s[i:j] 由你根据需求重写）
+# ② 拼回 head + ch + tail
+new = (open('_parts/head.md', encoding='utf-8').read()
+       + open('_parts/ch.md',   encoding='utf-8').read()
+       + open('_parts/tail.md', encoding='utf-8').read())
+assert '\r\n' not in new, 'CRLF 混入'
+io.open(N, 'wb').write(new.encode('utf-8'))                     # 'wb' 写入，LF 不被换成 CRLF
+
+# ③ 逐行核对 head / tail 与备份完全一致（只允许 updated: 那类预期改动）
+assert open('_parts/head.md', encoding='utf-8').read() == s[:i], 'head 被意外改动'
+assert open('_parts/tail.md', encoding='utf-8').read() == s[j:], 'tail 被意外改动'
+```
+
+**代价要交代清楚**：切段重写会让 `diff` 里本章的**所有行都显示为改过**，看不出「只动了哪几处」。所以务必：
+
+1. 动手前**手工备份**一份（此时绕过 vaultio，没有自动备份）；
+2. 拼回后**逐行核对 head/tail 与备份完全一致**（只允许 `updated:` 那类预期改动）；
+3. 汇报时明确说「本章为整段重写」。
+
+**判断尺子：只是往章节里加内容 → 照常用 `insert`（diff 干净）；要动章节的编号或顺序 → 切段重写。**
+
+实测（2026-10-09，一份 373 行的新章节稿）：落盘后才发现 4 处 `**` 渲染失效 + 2 处表格公式含 `|`，
+于是「落盘 → lint → 改 → 又备份一次」。**落盘前跑一遍就能一次改完**，省一轮备份和 diff。
+
+**库（vault）位置不用写死**：`vaultio.py` 按平台自动定位 Obsidian 的配置文件：
+
+| 平台 | 配置文件位置 |
+|---|---|
+| Windows | `%APPDATA%\obsidian\obsidian.json` |
+| macOS | `~/Library/Application Support/obsidian/obsidian.json` |
+| Linux | `$XDG_CONFIG_HOME/obsidian/obsidian.json`（默认 `~/.config/obsidian/`，兼容 Snap / Flatpak） |
+
+不在上述位置（便携版、自定义安装）时，用环境变量指定**包含 `obsidian.json` 的目录**：
+
+```bash
+export OBSIDIAN_CONFIG_DIR="<目录>"     # Windows PowerShell: $env:OBSIDIAN_CONFIG_DIR="<目录>"
+```
+
+`vaultio.py vaults` 找不到库时会打印它尝试过的所有位置，照着排查即可。
 
 ## 行尾与文件编码
 
