@@ -156,25 +156,6 @@ assert open('_parts/tail.md', encoding='utf-8').read() == s[j:], 'tail 被意外
 
 **判断尺子：只是往章节里加内容 → 照常用 `insert`（diff 干净）；要动章节的编号或顺序 → 切段重写。**
 
-实测（2026-10-09，一份 373 行的新章节稿）：落盘后才发现 4 处 `**` 渲染失效 + 2 处表格公式含 `|`，
-于是「落盘 → lint → 改 → 又备份一次」。**落盘前跑一遍就能一次改完**，省一轮备份和 diff。
-
-**库（vault）位置不用写死**：`vaultio.py` 按平台自动定位 Obsidian 的配置文件：
-
-| 平台 | 配置文件位置 |
-|---|---|
-| Windows | `%APPDATA%\obsidian\obsidian.json` |
-| macOS | `~/Library/Application Support/obsidian/obsidian.json` |
-| Linux | `$XDG_CONFIG_HOME/obsidian/obsidian.json`（默认 `~/.config/obsidian/`，兼容 Snap / Flatpak） |
-
-不在上述位置（便携版、自定义安装）时，用环境变量指定**包含 `obsidian.json` 的目录**：
-
-```bash
-export OBSIDIAN_CONFIG_DIR="<目录>"     # Windows PowerShell: $env:OBSIDIAN_CONFIG_DIR="<目录>"
-```
-
-`vaultio.py vaults` 找不到库时会打印它尝试过的所有位置，照着排查即可。
-
 ## 行尾与文件编码
 
 - **写 vault 文件一律走 `vaultio.py`，别手工用 Python 写。** 脚本内部已强制 `newline="\n"`；

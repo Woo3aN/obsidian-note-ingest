@@ -149,7 +149,7 @@ obsidian-note-ingest/
 │   ├── extraction.md      提取：两条路线（文本提取 / 从 PDF 重建）
 │   ├── figures.md         配图：截取还是重画
 │   ├── transcripts.md     录音稿 / 字幕稿
-│   ├── pitfalls.md        故障排查（写入 / 行尾 / 围栏 / 多章）
+│   ├── pitfalls.md        故障排查（写入的坑 / 绕路方案 / 行尾 / 围栏 / 多章）
 │   ├── note-format.md     笔记格式规范（frontmatter / 标题层级 / callout 上限 / 收尾三件套）
 │   ├── vault-profile.md   库档案**模板**（首次使用请先生成你自己的）
 │   ├── katex_commands.json KaTeX 支持的宏 / 环境白名单（lint 查公式用）
