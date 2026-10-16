@@ -1,6 +1,6 @@
 # obsidian-note-ingest
 
-> **正式版 1.0.0** —— 接口与文件结构趋于稳定；仍建议在能随时回滚的笔记库上使用。
+> **正式版 1.0.0** —— 接口与文件结构已稳定；使用时仍请确保笔记库可回滚。
 
 **把课件、录音稿、讲义整理成能直接读的 Obsidian 笔记。**
 
@@ -151,14 +151,14 @@ obsidian-note-ingest/
 │   ├── transcripts.md     录音稿 / 字幕稿
 │   ├── pitfalls.md        故障排查（写入的坑 / 绕路方案 / 行尾 / 围栏 / 多章）
 │   ├── note-format.md     笔记格式规范（frontmatter / 标题层级 / callout 上限 / 收尾三件套）
-│   ├── vault-profile.md   库档案**模板**（首次使用请先生成你自己的）
+│   ├── vault-profile.md   库档案模板（首次使用请先生成你自己的）
 │   ├── katex_commands.json KaTeX 支持的宏 / 环境白名单（lint 查公式用）
 │   └── symbol_map.json    Adobe Symbol 字体私有区码位表（公式重建用）
 ├── scripts/               独立命令行工具（核心能力都在这，可不依赖 Agent 直接跑）
 │   ├── vaultio.py         ★ 核心：库发现 / 定位 / 查重 / 插入替换 / 备份回滚
 │   ├── extract.py         材料统一提取（pptx / docx / pdf / srt / vtt / txt → Markdown）
 │   ├── pptx_deep.py       PPTX 深层提取：表格 + OMML 公式 + 形状 + 按页编号图片
-│   ├── renderpages.py     PDF 整页渲染成 PNG
+│   ├── renderpages.py     PDF 整页渲染成 PNG（看图核对用）
 │   ├── pdfdiff.py         两份同源 PDF 逐页比，指出改了哪几页
 │   ├── pdf_layout.py      版面几何重建公式 + 定位插图区域
 │   ├── pdf_panels.py      按纯色面板裁课件插图
@@ -176,22 +176,6 @@ $PY tests/smoke.py      # 冒烟测试，全部在临时目录里跑，不碰你
 ```
 
 `.github/workflows/ci.yml` 会在 **Linux + Windows** 上自动跑这套测试。
-
-## scripts 速查
-
-| 脚本 | 一句话 |
-|------|--------|
-| `vaultio.py` | 读写 vault 的唯一入口。**所有写入都自动备份，可 `restore` 回滚** |
-| `extract.py` | 一行命令把 pptx/docx/pdf/字幕 → Markdown |
-| `pptx_deep.py` | 课件 PPTX 专用：普通提取会漏的公式、表格、图，它全拿到 |
-| `renderpages.py` | PDF → PNG，用于「看图核对」 |
-| `pdfdiff.py` | 材料出了新版（答案版 / 修订版）时，直接指出哪几页变了 |
-| `pdf_layout.py` | 没有视觉模型时，用坐标把散架的公式拼回去 |
-| `pdf_panels.py` | 按面板颜色裁插图，切边最少 |
-| `obsidian_lint.py` | 写完跑一遍，死链和围栏错误必须为 0 |
-| `flatten_callouts.py` | 色块太多时批量降级成正文 |
-
----
 
 ## 换个系统要注意
 
