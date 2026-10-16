@@ -37,7 +37,7 @@ $PY $S/obsidian_lint.py "<笔记>"                               # 6. 体检，�
 | 整理一份新材料 | §3 工作流（1→7 顺序走） |
 | **同一份材料出了新版**（答案版 / 修订版） | §3.4；`$S/pdfdiff.py 旧.pdf 新.pdf` 定位改动页 |
 | 一处笔记要改很多地方 | §3.5 `patch`（一次落盘 = 一次备份 + 一次 diff） |
-| 重建目录区 | §3.5 `toc`（**先 `--dry-run`**） |
+| 目录区 | **不建**（Obsidian 自带大纲）；旧笔记要更新才跑 §3.5 `toc` |
 | 提取失败 / PPTX 漏表格公式 / 公式型 PDF / 老 `.ppt` | `references/extraction.md` |
 | 材料是录音稿 / 字幕稿 | `references/transcripts.md` |
 | 要把课件图放进笔记 / 重画图表 | `references/figures.md` |
@@ -239,8 +239,6 @@ $PY $S/vaultio.py insert "<笔记>" --anchor "### 章节标题" \
     --content-file "<整理稿>" --dry-run
 # 确认后落盘（自动备份 + 打印 diff）
 $PY $S/vaultio.py insert "<笔记>" --anchor "### 章节标题" --content-file "<整理稿>"
-$PY $S/vaultio.py toc "<笔记>" --dry-run   # 有目录区时：先看会改什么
-$PY $S/vaultio.py toc "<笔记>"             # 确认后落盘（默认沿用笔记现有排版）
 ```
 
 - `--at end-of-section`（默认）：追加到该章节**末尾**，适合新增小节
