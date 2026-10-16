@@ -223,6 +223,10 @@ def which_vault_for(path: Path) -> Path:
 
 FENCE = re.compile(r"^\s*(```|~~~)")
 HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
+# 「占位 / 预告」类色块：块内往往列满了还没写的术语，算进正文会让查重虚高
+PLACEHOLDER_CALLOUT = re.compile(r"^\s*>\s*\[!(?:todo|info)\]", re.I)
+# 文末导航段：是进度说明，不是知识内容
+LINK_SECTION = re.compile(r"^#{1,6}\s*相关链接\s*$")
 
 
 def parse_headings(text: str) -> list[dict]:
@@ -675,6 +679,35 @@ def _fallback_keywords(text: str, topk: int) -> list[str]:
     return [w for w, c in cnt.most_common(topk * 4) if c > 1][:topk]
 
 
+def body_text(note_raw: str) -> str:
+    """笔记里真正算「正文」的部分，用于判定某个术语是不是**实质**被覆盖了。
+
+    排除四类：**标题行**、**色块首行**、**占位 / 预告类色块（[!todo] / [!info]）的块内行**、
+    **文末「相关链接」导航段**。后两类是「说了要写什么、正文却没有」的典型来源 ——
+    把它们算进正文，就会让一条「待学」预告或一句「其后的 XX 待上」把术语全“覆盖”掉，
+    覆盖率虚高到 80%+ 而判「不要写」。
+    """
+    out, in_ph, in_link = [], False, False
+    for l in note_raw.splitlines():
+        if HEADING.match(l):
+            in_link = bool(LINK_SECTION.match(l))
+            in_ph = False
+            continue
+        if PLACEHOLDER_CALLOUT.match(l):
+            in_ph = True
+            continue
+        if in_ph:
+            if l.lstrip().startswith(">"):
+                continue
+            in_ph = False
+        if re.match(r"^\s*>\s*\[!", l):        # 其余色块只排除首行
+            continue
+        if in_link:
+            continue
+        out.append(l)
+    return strip_md("\n".join(out))
+
+
 def check_duplicate(note_path: Path, content: str, threshold: float = 0.55) -> dict:
     """评估待写入内容与笔记的重合度。
 
@@ -711,15 +744,9 @@ def check_duplicate(note_path: Path, content: str, threshold: float = 0.55) -> d
         (result["covered"] if k in note_clean else result["missing"]).append(k)
     result["coverage"] = len(result["covered"]) / max(1, len(kws))
 
-    # 弱命中：词在笔记里能找到，但**正文里**找不到（只出现在标题行或 callout 首行）。
-    # 这类"只提到名字"的命中会让覆盖率虚高（典型：笔记里一条「待学」预告就把术语写全了，
-    # 或者术语只当小节标题用），所以单独列出来给人工复核。
-    body_lines = [
-        l for l in note_raw.splitlines()
-        if not HEADING.match(l) and not re.match(r"^\s*>\s*\[!", l)
-    ]
-    body_clean = strip_md("\n".join(body_lines))
-    result["weak"] = [k for k in result["covered"] if k not in body_clean]
+    # 弱命中：词在笔记里能找到，但**正文里**找不到 —— 只出现在标题、色块首行、
+    # 占位 / 预告类色块块内，或文末「相关链接」导航段（见 body_text）。
+    result["weak"] = [k for k in result["covered"] if k not in body_text(note_raw)]
 
     # 二级参考：字面高度重合的片段。
     # 由此得到的 dup_ratio（有近重复对应的内容单元占比）用来区分两件**动作完全相反**的事：
@@ -765,7 +792,7 @@ def cmd_check(args) -> int:
         print("\n  ★ 材料的关键词在笔记里已全部出现过")
 
     if r["weak"]:
-        print(f"\n  ⚠ 弱命中 {len(r['weak'])} 个（只在标题 / 色块标题里出现过，正文里没有）:")
+        print(f"\n  ⚠ 弱命中 {len(r['weak'])} 个（只在标题 / 预告 / 文末导航里出现过，正文里没有）:")
         print("      " + "、".join(r["weak"][:20]))
         print("      → 这类「只提到名字」不算实质覆盖；若它们正是本次材料的重点，照常写入。")
 
@@ -976,14 +1003,21 @@ def cmd_insert(args) -> int:
               "或把内容合并进已有章节。", file=sys.stderr)
         return 1
 
+    lines = text.splitlines()
     if args.at == "end-of-section":
         # 退回到章节内最后一个非空行之后，避免插在章节中间
-        lines = text.splitlines()
         while end > at and not lines[end - 1].strip():
             end -= 1
         pos, what = end, f"已追加到「{args.anchor}」章节末尾（{len(content)} 字符）"
     else:
         pos, what = at, f"已插入「{args.anchor}」标题之后（{len(content)} 字符）"
+
+    # 插在一条 `---` 之后时提醒一句：那条线多半是本节与下一节的分隔线，
+    # 内容会被顶到线的下方。diff 里只显示「在 --- 后插了 N 行」，不刺眼，容易漏。
+    if pos > 0 and lines[pos - 1].strip() == "---":
+        print("[提示] 插入点紧邻一条 `---`：本次插在它**之后**。"
+              "若那条线本该分隔本节与下一节，内容就被顶到线的下方了；"
+              "想插在它之前，见 SKILL.md §3.5。", file=sys.stderr)
 
     new_text = insert_text(text, pos, content)
     return _apply_change(p, new_text, what, args.diff, args.dry_run)
@@ -1267,7 +1301,7 @@ def cmd_patch(args) -> int:
     for start, _, o, nw in reversed(spots):
         new_text = new_text[:start] + nw + new_text[start + len(o):]
 
-    return _apply_change(p, new_text, f"批量应用 {len(edits)} 处改动", True, args.dry_run)
+    return _apply_change(p, new_text, f"批量应用 {len(edits)} 处改动", args.diff, args.dry_run)
 
 
 def cmd_toc(args) -> int:
@@ -1444,6 +1478,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--edits-file", required=True,
                    help="改动清单；每处用 '<<<<<<< OLD / ======= / >>>>>>> NEW' 三行隔开")
     p.add_argument("--dry-run", action="store_true", help="只打印变更预览，不写入")
+    p.add_argument("--no-diff", dest="diff", action="store_false", help="不打印变更预览")
     p.set_defaults(func=cmd_patch)
 
     p = sub.add_parser("replace", help="替换一个内容块")

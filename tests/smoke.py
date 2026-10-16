@@ -27,6 +27,12 @@
  19. renderpages --pages 要能接 extract --stats 打印的方括号列表
  20. extract --as-text 要原样保留纯文本笔记
  21. pdfdiff 能定位到有改动的页
+ 22. 内容文件路径写错时给友好提示，而不是抛 traceback
+ 23. lint 的 LaTeX 宏/环境检查：不支持的报出来，合法的与代码块不误报
+ 24. lint 的 `**` 检查：没生效的报出来，正常加粗/代码/公式/填空不误报
+ 25. insert 插到章节末尾那条 `---` 之后时要给提示
+ 26. check 的「弱命中」要把「只出现在文末相关链接 / 占位预告里」的词挑出来
+ 27. patch 也要支持 --no-diff（与 insert / append / replace 一致）
 """
 
 from __future__ import annotations
@@ -397,6 +403,43 @@ def main() -> int:
         check("lint 抓出没生效的 ** 加粗", n_emph == 2, f"报了 {n_emph} 条（应为 2）")
         check("lint 不误报正常加粗 / 代码 / 填空 / 公式",
               "第 13 行" not in out and "第 15 行" not in out)
+
+    # 25) insert 插到章节末尾那条 `---` 之后时要给提示（否则会被顶到分隔线下方，只能回头再补 patch）
+    sep = vault / "sep.md"
+    sep.write_text("# T\n\n### 甲\n\n内容 A\n\n---\n\n## 下一节\n\n正文\n",
+                   encoding="utf-8", newline="\n")
+    snip = work / "snip.md"
+    snip.write_text("### 新小节\n\n新内容\n", encoding="utf-8", newline="\n")
+    r = run(str(SCRIPTS / "vaultio.py"), "insert", str(sep),
+            "--anchor", "### 甲", "--content-file", str(snip), "--dry-run")
+    check("insert 插在 `---` 之后时给出提示",
+          "紧邻一条 `---`" in r.stderr, f"exit={r.returncode}")
+
+    # 26) check 的「弱命中」要把「只出现在文末相关链接 / 占位预告里」的词挑出来
+    #     （术语要挑 jieba 会整体切出的复合词，否则会被拆成单字，测不到）
+    wm = vault / "wm.md"
+    wm.write_text("# 某笔记\n\n## 1 甲\n\n这一节讲的是集合的基本概念与运算。\n\n"
+                  "## 相关链接\n\n- 第四章还要讲等价关系、商集、传递性，都还没上\n",
+                  encoding="utf-8", newline="\n")
+    dm = work / "draft_wm.md"
+    dm.write_text("集合的基本概念与运算说明。\n\n等价关系 商集 传递性 都是后面章节的重点。\n",
+                  encoding="utf-8", newline="\n")
+    r = run(str(SCRIPTS / "vaultio.py"), "check", str(wm), "--content-file", str(dm))
+    out = r.stdout + r.stderr
+    check("check 把「只在相关链接/预告里出现」的词判为弱命中",
+          "弱命中" in out and "等价关系" in out.split("弱命中")[1][:200],
+          f"exit={r.returncode}")
+
+    # 27) patch 也要支持 --no-diff（与 insert / append / replace 一致）
+    pn = vault / "pn.md"
+    pn.write_text("# T\n\n内容 A\n", encoding="utf-8", newline="\n")
+    pe = work / "pe.txt"
+    pe.write_text("<<<<<<< OLD\n内容 A\n=======\n内容 B\n>>>>>>> NEW\n",
+                  encoding="utf-8", newline="\n")
+    r = run(str(SCRIPTS / "vaultio.py"), "patch", str(pn), "--edits-file", str(pe), "--no-diff")
+    check("patch 支持 --no-diff（不再报 unrecognized arguments）",
+          r.returncode == 0 and "内容 B" in pn.read_text(encoding="utf-8"),
+          f"exit={r.returncode}")
 
     print()
     if failures:
