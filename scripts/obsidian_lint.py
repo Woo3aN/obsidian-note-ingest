@@ -198,12 +198,13 @@ def mask_markup(text: str) -> str:
 
 
 def check_emphasis(text: str, lines: list[str], report: Report) -> int:
-    """报出「渲染后仍是字面量」的 ** / __ —— 需要 markdown-it-py。
+    """报出两类「加粗没生效」—— 需要 markdown-it-py，且**光看源码都看不出来**：
 
-    这是中文笔记的高频坑，而且**光看源码看不出来**：
-      `**工具调用（Tool Calling）**机制`  → 闭合 ** 前是标点、后紧跟文字 → 无法闭合
-      `是**「推理即计算」**：`            → 开启 ** 前是文字、后紧跟标点 → 无法开启
-    两处都会把 `**` 原样显示出来。直接渲染一遍再找残留，比用正则猜规则可靠得多。
+    1. **渲染成字面量**：`**工具调用（Tool Calling）**机制`（闭合 ** 前是标点、后紧跟文字）、
+       `是**「推理即计算」**：`（开启 ** 前是文字、后紧跟标点）。
+    2. **配对错乱**：`**术语（English）**后面还有**别的加粗**` —— 第一个 `**` 闭不上，
+       会跟**后面那个** `**` 错配，渲染出一段嵌套 `<strong>`，把中间一大段都加粗了。
+       这种情况**一个 `**` 都不残留**，只查残留是抓不到的。
     """
     try:
         from markdown_it import MarkdownIt
@@ -211,23 +212,34 @@ def check_emphasis(text: str, lines: list[str], report: Report) -> int:
         return -1                       # -1 = 没装解析器，跳过（不误报）
     md = MarkdownIt("commonmark")
     masked = mask_markup(text).splitlines()
-    bad: list[tuple[int, str]] = []
+    bad: list[tuple[int, str, bool]] = []
 
     for i, mline in enumerate(masked, 1):
         if "**" not in mline and "__" not in mline:
             continue
         leftover = False
+        nested = False
         snippet = ""
 
         def walk(toks):
-            nonlocal leftover, snippet
+            nonlocal leftover, nested, snippet
             for t in toks:
                 if t.type == "inline" and t.children:
+                    depth = 0
+                    plain = []
                     for c in t.children:
-                        if c.type == "text" and c.content and EMPH_LEFTOVER.search(c.content):
-                            leftover = True
-                            if not snippet:
-                                snippet = c.content
+                        if c.type == "strong_open":
+                            depth += 1
+                            if depth >= 2:
+                                nested = True
+                        elif c.type == "strong_close":
+                            depth = max(0, depth - 1)
+                        elif c.type == "text" and c.content:
+                            plain.append(c.content)
+                            if EMPH_LEFTOVER.search(c.content):
+                                leftover = True
+                    if (leftover or nested) and not snippet:
+                        snippet = " ".join("".join(plain).split())
                 if t.children:
                     walk(t.children)
 
@@ -235,16 +247,21 @@ def check_emphasis(text: str, lines: list[str], report: Report) -> int:
             walk(md.parse(mline))
         except Exception:
             continue
-        if leftover:
-            bad.append((i, snippet))
+        if leftover or nested:
+            bad.append((i, snippet, nested))
 
-    for ln, seg in bad:
-        msg = ("`**` 渲染成了字面量（行内加粗没生效）→ "
-               "把紧贴 ** 的标点移到外面（`**术语**（English）`、`「**术语**」`），"
-               "或在其外侧补一个空格")
-        seg = " ".join(seg.split())
+    for ln, seg, nested in bad:
+        if nested:
+            msg = ("`**` 配对错乱：某个 `**` 没能闭合、跟后面的 `**` 错配了 —— "
+                   "渲染时会把**中间一整段**都加粗（源码里既看不到、也不会残留 `**`）。"
+                   "多半是加粗块结尾紧贴中文标点（`**术语（English）**后面`），"
+                   "把标点移到外面写成 `**术语**（English）`")
+        else:
+            msg = ("`**` 渲染成了字面量（行内加粗没生效）→ "
+                   "把紧贴 ** 的标点移到外面（`**术语**（English）`、`「**术语**」`），"
+                   "或在其外侧补一个空格")
         if seg:
-            msg += f"；残留片段：{seg[:70]}"
+            msg += f"；片段：{seg[:70]}"
         report.warn(ln, msg)
     return len(bad)
 
