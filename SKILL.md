@@ -1,7 +1,13 @@
 ---
 name: obsidian-note-ingest
+display_name: Obsidian 笔记收录
+display_name_en: Obsidian Note Ingest
 description: 把学习材料（PPT/PPTX、PDF、Word/DOCX、录音转写稿、字幕稿、图片截图）整理成符合 Obsidian 语法的笔记，追加进课程主笔记或新建笔记写入 Obsidian vault。触发场景：用户说「记笔记」「帮我记一下」「整理成笔记」「整理一下这份」「写进 Obsidian」「归档」「存进笔记」「更新笔记」「这门课的笔记」，或发来课件、讲义、录音稿、字幕稿、课堂笔记草稿、课堂截图需要整理归档时。也用于整理 Clippings 目录里积累的未整理素材。
+description_zh: 把课件、PDF、录音稿、字幕等学习材料整理成 Obsidian 笔记，自动去重后追加进课程主笔记。
 description_en: 'Turn lecture slides (PPT/PPTX), PDFs, Word/DOCX, transcripts, subtitles, or screenshots into Obsidian-formatted notes: extract, dedupe, and append into a course note or create a new one. Use when the user says "take notes", "organize this into notes", "write into Obsidian", "archive this", or sends courseware, handouts, transcripts, subtitles, or lecture screenshots to be organized.'
+category: writing
+version: 1.0.5
+author: Woo3aN
 agent_created: true
 ---
 
