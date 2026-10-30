@@ -170,6 +170,13 @@ assert open('_parts/tail.md', encoding='utf-8').read() == s[j:], 'tail 被意外
   与笔记里的 `\n` 对不上，`assert` 必然失败。改用**列表 + `"\n".join([...])`** 逐行拼。
 - **长列表里容易漏掉行尾的 `",`**，报 `SyntaxError: unterminated string literal`。
 
+- **含 LaTeX 的字符串必须写成 raw string**（`r"""..."""`）。普通字符串会把 `\t`、`\f`、`\b` 当转义：
+  `\tau` / `\times` / `\theta` 变成**制表符**、`\frac` 变成**换页符**。
+  `py_compile` 照样通过（只发一条 `SyntaxWarning: invalid escape sequence`，很容易被后面的输出淹没），
+  `lint` 也不报 —— 写进去的是一段**看不见的乱码**。写完统一校验一次：
+  `assert not [c for c in s if ord(c) < 32 and c != "\n"]`。
+  已经写坏了就按控制字符还原：`s.replace("\f", "\\f").replace("\t", "\\t")`。
+
 **动作：脚本写完先 `python -m py_compile apply.py`，过了再执行。**
 
 ## 行尾与文件编码
